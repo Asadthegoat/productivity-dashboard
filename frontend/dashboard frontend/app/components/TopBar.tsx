@@ -1,8 +1,19 @@
 "use client"
 
 import { Calendar, TrendingUp } from "lucide-react"
+import { useDashboard } from "../context/DashboardContext"
 
 export default function TopBar() {
+  const { data, loading } = useDashboard()
+
+  if (loading) {
+    return (
+      <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700">
+        <div className="text-gray-400">Loading dashboard...</div>
+      </div>
+    )
+  }
+
   return (
     <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
@@ -26,18 +37,18 @@ export default function TopBar() {
             <h3 className="text-sm font-semibold text-white">Today's Schedule</h3>
           </div>
           <div className="space-y-2 text-xs">
-            <div className="flex justify-between">
-              <span className="text-gray-300">9:00 AM</span>
-              <span className="text-gray-400">Team Meeting</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-300">2:00 PM</span>
-              <span className="text-gray-400">Project Review</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-300">4:30 PM</span>
-              <span className="text-gray-400">Workout</span>
-            </div>
+            {data.schedule.length > 0 ? (
+              data.schedule.slice(0, 3).map((event) => (
+                <div key={event.id} className="flex justify-between">
+                  <span className="text-gray-300">{event.time}</span>
+                  <span className="text-gray-400">{event.event}</span>
+                </div>
+              ))
+            ) : (
+              <div className="text-gray-400 text-center py-2">
+                No events scheduled
+              </div>
+            )}
           </div>
         </div>
 
@@ -45,17 +56,20 @@ export default function TopBar() {
         <div className="bg-gray-700 rounded-lg p-4 border border-gray-600">
           <div className="flex items-center gap-2 mb-3">
             <TrendingUp className="w-4 h-4 text-green-400" />
-            <h3 className="text-sm font-semibold text-white">Level 8</h3>
+            <h3 className="text-sm font-semibold text-white">Level {data.level}</h3>
           </div>
           <div className="space-y-2">
             <div className="flex justify-between text-xs">
               <span className="text-gray-400">Progress</span>
-              <span className="text-gray-300">75%</span>
+              <span className="text-gray-300">{Math.round((data.xp / data.maxXp) * 100)}%</span>
             </div>
             <div className="w-full bg-gray-600 rounded-full h-2">
-              <div className="bg-green-500 h-2 rounded-full" style={{ width: "75%" }}></div>
+              <div 
+                className="bg-green-500 h-2 rounded-full" 
+                style={{ width: `${(data.xp / data.maxXp) * 100}%` }}
+              ></div>
             </div>
-            <p className="text-xs text-gray-400">2,250 / 3,000 XP</p>
+            <p className="text-xs text-gray-400">{data.xp} / {data.maxXp} XP</p>
           </div>
         </div>
       </div>

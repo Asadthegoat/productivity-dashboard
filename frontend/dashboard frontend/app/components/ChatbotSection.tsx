@@ -4,6 +4,7 @@ import type React from "react"
 
 import { useState } from "react"
 import { MessageCircle, Send } from "lucide-react"
+import { useDashboard } from "../context/DashboardContext"
 
 export default function ChatbotSection() {
   const [message, setMessage] = useState("")
@@ -16,6 +17,7 @@ export default function ChatbotSection() {
         "Based on your goals, I recommend focusing on your project proposal first, then your workout. You're making great progress!",
     },
   ])
+  const { data, addGoal, addScheduleEvent, addWorkout, refreshData } = useDashboard()
 
  const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
@@ -31,7 +33,7 @@ export default function ChatbotSection() {
   console.log("Sending message to backend:", message); // Debug: message being sent
 
   try {
-    const res = await fetch("http://localhost:5000/chat", {
+    const res = await fetch("https://productivity-dashboard-218x.onrender.com/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message }),
@@ -39,11 +41,81 @@ export default function ChatbotSection() {
     console.log("Fetch response status:", res.status); // Debug: response status
     const data = await res.json();
     console.log("Response from backend:", data); // Debug: backend response
+    
+    // Check if the AI response contains action keywords and trigger dashboard actions
+    const aiResponse = data.response || "";
+    const lowerResponse = aiResponse.toLowerCase();
+    
+    // Check for goal-related actions
+    if (lowerResponse.includes("add") && (lowerResponse.includes("goal") || lowerResponse.includes("task"))) {
+      if (lowerResponse.includes("short") || lowerResponse.includes("daily") || lowerResponse.includes("weekly")) {
+        const goalText = extractGoalText(message, aiResponse);
+        if (goalText) {
+          await addGoal('shortTerm', goalText);
+          setChatHistory((prev) => [
+            ...prev,
+            {
+              type: "bot",
+              message: `Great! I've added "${goalText}" to your short-term goals. Keep up the great work!`,
+            },
+          ]);
+          return;
+        }
+      } else if (lowerResponse.includes("long") || lowerResponse.includes("monthly") || lowerResponse.includes("yearly")) {
+        const goalText = extractGoalText(message, aiResponse);
+        if (goalText) {
+          await addGoal('longTerm', goalText);
+          setChatHistory((prev) => [
+            ...prev,
+            {
+              type: "bot",
+              message: `Excellent! I've added "${goalText}" to your long-term goals. You're building a great future!`,
+            },
+          ]);
+          return;
+        }
+      }
+    }
+    
+    // Check for schedule-related actions
+    if (lowerResponse.includes("schedule") || lowerResponse.includes("meeting") || lowerResponse.includes("appointment")) {
+      const { time, event } = extractScheduleInfo(message, aiResponse);
+      if (time && event) {
+        await addScheduleEvent(time, event);
+        setChatHistory((prev) => [
+          ...prev,
+          {
+            type: "bot",
+            message: `Perfect! I've scheduled "${event}" at ${time}. Your calendar is updated!`,
+          },
+        ]);
+        return;
+      }
+    }
+    
+    // Check for workout-related actions
+    if (lowerResponse.includes("workout") || lowerResponse.includes("exercise") || lowerResponse.includes("gym")) {
+      const { type, duration } = extractWorkoutInfo(message, aiResponse);
+      if (type && duration) {
+        const calories = Math.round(duration * 8); // Rough estimate
+        await addWorkout(type, duration, calories);
+        setChatHistory((prev) => [
+          ...prev,
+          {
+            type: "bot",
+            message: `Awesome! I've logged your ${duration}-minute ${type} workout. You're staying fit and earning XP!`,
+          },
+        ]);
+        return;
+      }
+    }
+    
+    // Default response
     setChatHistory((prev) => [
       ...prev,
       {
         type: "bot",
-        message: data.response || "Sorry, I couldn't get a response from the AI.",
+        message: aiResponse || "Sorry, I couldn't get a response from the AI.",
       },
     ]);
   } catch (err) {
@@ -56,6 +128,72 @@ export default function ChatbotSection() {
       },
     ]);
   }
+};
+
+// Helper functions to extract information from user messages and AI responses
+const extractGoalText = (userMessage: string, aiResponse: string): string | null => {
+  // Look for goal text in the user message
+  const goalKeywords = ["goal", "task", "objective", "target"];
+  const words = userMessage.toLowerCase().split(" ");
+  
+  for (let i = 0; i < words.length; i++) {
+    if (goalKeywords.includes(words[i])) {
+      // Extract text after the goal keyword
+      const goalText = userMessage.substring(userMessage.toLowerCase().indexOf(words[i]) + words[i].length).trim();
+      if (goalText) {
+        return goalText;
+      }
+    }
+  }
+  
+  // If no goal keyword found, try to extract from the full message
+  if (userMessage.length > 10) {
+    return userMessage;
+  }
+  
+  return null;
+};
+
+const extractScheduleInfo = (userMessage: string, aiResponse: string): { time: string | null, event: string | null } => {
+  const timePattern = /(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)/;
+  const timeMatch = userMessage.match(timePattern);
+  const time = timeMatch ? timeMatch[1] : null;
+  
+  // Extract event name (everything after time or common scheduling words)
+  const schedulingWords = ["schedule", "meeting", "appointment", "call", "at"];
+  let event = null;
+  
+  for (const word of schedulingWords) {
+    const index = userMessage.toLowerCase().indexOf(word);
+    if (index !== -1) {
+      event = userMessage.substring(index + word.length).trim();
+      break;
+    }
+  }
+  
+  return { time, event };
+};
+
+const extractWorkoutInfo = (userMessage: string, aiResponse: string): { type: string | null, duration: number | null } => {
+  const workoutTypes = ["cardio", "strength", "yoga", "running", "cycling", "swimming", "weightlifting"];
+  const durationPattern = /(\d+)\s*(?:min|minutes?|mins?)/;
+  
+  const durationMatch = userMessage.match(durationPattern);
+  const duration = durationMatch ? parseInt(durationMatch[1]) : 30; // Default 30 minutes
+  
+  let type = null;
+  for (const workoutType of workoutTypes) {
+    if (userMessage.toLowerCase().includes(workoutType)) {
+      type = workoutType;
+      break;
+    }
+  }
+  
+  if (!type) {
+    type = "workout"; // Default type
+  }
+  
+  return { type, duration };
 };
 
   return (

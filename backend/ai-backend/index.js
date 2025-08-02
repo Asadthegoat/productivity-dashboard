@@ -201,7 +201,7 @@ app.post('/chat', async (req, res) => {
     // Get current dashboard data to provide context to AI
     const dashboardData = readData();
     
-    // Create a system prompt that gives the AI context about the dashboard
+    // Create a system prompt that gives the AI context about the dashboard, including actual data
     const systemPrompt = `You are A.S.A.D (AI-powered Smart Assistant for Dashboard), a productivity assistant that helps users manage their dashboard. You can:
 
 1. Add, update, and delete goals (both short-term and long-term)
@@ -211,11 +211,17 @@ app.post('/chat', async (req, res) => {
 5. Help with productivity tips
 
 Current dashboard state:
-- Short-term goals: ${dashboardData.goals.shortTerm.length} goals
-- Long-term goals: ${dashboardData.goals.longTerm.length} goals
-- Schedule events: ${dashboardData.schedule.length} events
-- Workout log entries: ${dashboardData.workoutLog.length} workouts
-- User level: ${dashboardData.level} (${dashboardData.xp}/${dashboardData.maxXp} XP)
+Short-term goals:
+${dashboardData.goals.shortTerm.map(g => `- ${g.text} (${g.progress}%)`).join('\n')}
+
+Long-term goals:
+${dashboardData.goals.longTerm.map(g => `- ${g.text} (${g.progress}%)`).join('\n')}
+
+Today's schedule:
+${dashboardData.schedule.map(e => `- ${e.time}: ${e.event} [${e.type || ''}]`).join('\n')}
+
+Workout log entries: ${dashboardData.workoutLog.length} workouts
+User level: ${dashboardData.level} (${dashboardData.xp}/${dashboardData.maxXp} XP)
 
 When users ask to add goals, schedule events, or log workouts, respond with a JSON action object like:
 {"action": "add_goal", "type": "shortTerm", "text": "goal text", "progress": 0}

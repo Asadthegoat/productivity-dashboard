@@ -255,68 +255,77 @@ For regular conversation, just respond normally. Always be helpful and motivatio
       const actionMatch = aiResponse.match(/\{.*\}/s);
       if (actionMatch) {
         const actionData = JSON.parse(actionMatch[0]);
-        
-        // Execute the action
+        const data = readData();
+
+        // Add Goal
         if (actionData.action === 'add_goal') {
-          const goalRes = await fetch(`http://localhost:${PORT}/api/goals`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              type: actionData.type,
-              text: actionData.text,
-              progress: actionData.progress || 0
-            })
-          });
-          
-          if (goalRes.ok) {
-            const goalData = await goalRes.json();
+          const newGoal = {
+            id: Date.now(),
+            text: actionData.text,
+            completed: false,
+            progress: actionData.progress || 0,
+            createdAt: new Date().toISOString()
+          };
+          if (actionData.type === 'shortTerm') {
+            data.goals.shortTerm.push(newGoal);
+          } else if (actionData.type === 'longTerm') {
+            data.goals.longTerm.push(newGoal);
+          }
+          if (writeData(data)) {
             res.json({ 
               response: `Great! I've added "${actionData.text}" to your ${actionData.type} goals. Keep up the great work!`,
               action: actionData,
-              data: goalData
+              data: newGoal
             });
             return;
           }
         }
-        
+
+        // Add Schedule
         if (actionData.action === 'add_schedule') {
-          const scheduleRes = await fetch(`http://localhost:${PORT}/api/schedule`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              time: actionData.time,
-              event: actionData.event
-            })
-          });
-          
-          if (scheduleRes.ok) {
-            const scheduleData = await scheduleRes.json();
+          const newEvent = {
+            id: Date.now(),
+            time: actionData.time,
+            event: actionData.event,
+            createdAt: new Date().toISOString()
+          };
+          data.schedule.push(newEvent);
+          if (writeData(data)) {
             res.json({ 
               response: `Perfect! I've added "${actionData.event}" at ${actionData.time} to your schedule.`,
               action: actionData,
-              data: scheduleData
+              data: newEvent
             });
             return;
           }
         }
-        
+
+        // Add Workout
         if (actionData.action === 'add_workout') {
-          const workoutRes = await fetch(`http://localhost:${PORT}/api/workout`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              type: actionData.type,
-              duration: actionData.duration,
-              calories: actionData.calories
-            })
-          });
-          
-          if (workoutRes.ok) {
-            const workoutData = await workoutRes.json();
+          const newWorkout = {
+            id: Date.now(),
+            type: actionData.type,
+            duration: actionData.duration,
+            calories: actionData.calories,
+            date: new Date().toISOString()
+          };
+          data.workoutLog.push(newWorkout);
+
+          // Add XP for workout completion
+          data.xp = Math.min(data.xp + 50, data.maxXp);
+          if (data.xp >= data.maxXp) {
+            data.level += 1;
+            data.xp = 0;
+            data.maxXp = Math.floor(data.maxXp * 1.2);
+          }
+
+          if (writeData(data)) {
             res.json({ 
               response: `Excellent! I've logged your ${actionData.type} workout. You're making great progress!`,
               action: actionData,
-              data: workoutData
+              data: newWorkout,
+              level: data.level,
+              xp: data.xp
             });
             return;
           }

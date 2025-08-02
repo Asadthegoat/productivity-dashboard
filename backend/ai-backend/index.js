@@ -226,29 +226,28 @@ For workout: {"action": "add_workout", "type": "Cardio", "duration": 30, "calori
 
 For regular conversation, just respond normally. Always be helpful and motivational!`;
 
+    // GROQ API integration
+    const GROQ_API_KEY = process.env.GROQ_API_KEY;
+    const groqPayload = {
+      model: "llama3-8b-8192", // or another Groq-supported model
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message }
+      ]
+    };
+
     const response = await axios.post(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-      {
-        contents: [
-          { 
-            parts: [
-              { text: systemPrompt },
-              { text: `User message: ${message}` }
-            ]
-          }
-        ]
-      },
+      "https://api.groq.com/openai/v1/chat/completions",
+      groqPayload,
       {
         headers: {
-          'Content-Type': 'application/json',
-        },
-        params: {
-          key: GEMINI_API_KEY
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${GROQ_API_KEY}`
         }
       }
     );
-    
-    const aiResponse = response.data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, I could not generate a response.';
+
+    const aiResponse = response.data.choices?.[0]?.message?.content || 'Sorry, I could not generate a response.';
     
     // Check if the response contains a JSON action
     try {

@@ -46,7 +46,9 @@ interface DashboardContextType {
   addGoal: (type: 'shortTerm' | 'longTerm', text: string, progress?: number) => Promise<void>;
   updateGoal: (id: number, updates: Partial<Goal>) => Promise<void>;
   deleteGoal: (id: number) => Promise<void>;
-  addScheduleEvent: (time: string, event: string) => Promise<void>;
+  addScheduleEvent: (time: string, event: string, type?: string) => Promise<void>;
+  updateScheduleEvent?: (id: number, time: string, event: string, type?: string) => Promise<void>;
+  deleteScheduleEvent?: (id: number) => Promise<void>;
   addWorkout: (type: string, duration: number, calories: number) => Promise<void>;
 }
 
@@ -158,21 +160,47 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
     }
   };
 
-  const addScheduleEvent = async (time: string, event: string) => {
+  const addScheduleEvent = async (time: string, event: string, type: string = "work") => {
     try {
       const newEvent = {
         id: Date.now(),
         time,
         event,
+        type,
         createdAt: new Date().toISOString()
       };
-      
       setData(prev => ({
         ...prev,
         schedule: [...prev.schedule, newEvent]
       }));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add schedule event');
+      throw err;
+    }
+  };
+
+  const updateScheduleEvent = async (id: number, time: string, event: string, type: string = "work") => {
+    try {
+      setData(prev => ({
+        ...prev,
+        schedule: prev.schedule.map(ev =>
+          ev.id === id ? { ...ev, time, event, type } : ev
+        )
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update schedule event');
+      throw err;
+    }
+  };
+
+  const deleteScheduleEvent = async (id: number) => {
+    try {
+      setData(prev => ({
+        ...prev,
+        schedule: prev.schedule.filter(ev => ev.id !== id)
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete schedule event');
       throw err;
     }
   };
@@ -215,6 +243,8 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
     updateGoal,
     deleteGoal,
     addScheduleEvent,
+    updateScheduleEvent,
+    deleteScheduleEvent,
     addWorkout
   };
 

@@ -42,78 +42,45 @@ export default function ChatbotSection() {
     const data = await res.json();
     console.log("Response from backend:", data); // Debug: backend response
     
-    // Check if the AI response contains action keywords and trigger dashboard actions
+    // Use backend action object for dashboard updates
     const aiResponse = data.response || "";
-    const lowerResponse = aiResponse.toLowerCase();
+    const action = data.action;
 
-    let dashboardActionPerformed = false;
-
-    // Check for goal-related actions
-    if (lowerResponse.includes("add") && (lowerResponse.includes("goal") || lowerResponse.includes("task"))) {
-      if (lowerResponse.includes("short") || lowerResponse.includes("daily") || lowerResponse.includes("weekly")) {
-        const goalText = extractGoalText(message, aiResponse);
-        if (goalText) {
-          await addGoal('shortTerm', goalText);
-          dashboardActionPerformed = true;
-          setChatHistory((prev) => [
-            ...prev,
-            {
-              type: "bot",
-              message: `Great! I've added "${goalText}" to your short-term goals. Keep up the great work!`,
-            },
-          ]);
-        }
-      } else if (lowerResponse.includes("long") || lowerResponse.includes("monthly") || lowerResponse.includes("yearly")) {
-        const goalText = extractGoalText(message, aiResponse);
-        if (goalText) {
-          await addGoal('longTerm', goalText);
-          dashboardActionPerformed = true;
-          setChatHistory((prev) => [
-            ...prev,
-            {
-              type: "bot",
-              message: `Excellent! I've added "${goalText}" to your long-term goals. You're building a great future!`,
-            },
-          ]);
-        }
-      }
+    if (action && action.action === "add_goal" && action.text && action.type) {
+      await addGoal(action.type, action.text);
+      setChatHistory((prev) => [
+        ...prev,
+        {
+          type: "bot",
+          message: aiResponse,
+        },
+      ]);
+      refreshData();
+      return;
     }
 
-    // Check for schedule-related actions
-    if (!dashboardActionPerformed && (lowerResponse.includes("schedule") || lowerResponse.includes("meeting") || lowerResponse.includes("appointment"))) {
-      const { time, event } = extractScheduleInfo(message, aiResponse);
-      if (time && event) {
-        await addScheduleEvent(time, event);
-        dashboardActionPerformed = true;
-        setChatHistory((prev) => [
-          ...prev,
-          {
-            type: "bot",
-            message: `Perfect! I've scheduled "${event}" at ${time}. Your calendar is updated!`,
-          },
-        ]);
-      }
+    if (action && action.action === "add_schedule" && action.time && action.event) {
+      await addScheduleEvent(action.time, action.event);
+      setChatHistory((prev) => [
+        ...prev,
+        {
+          type: "bot",
+          message: aiResponse,
+        },
+      ]);
+      refreshData();
+      return;
     }
 
-    // Check for workout-related actions
-    if (!dashboardActionPerformed && (lowerResponse.includes("workout") || lowerResponse.includes("exercise") || lowerResponse.includes("gym"))) {
-      const { type, duration } = extractWorkoutInfo(message, aiResponse);
-      if (type && duration) {
-        const calories = Math.round(duration * 8); // Rough estimate
-        await addWorkout(type, duration, calories);
-        dashboardActionPerformed = true;
-        setChatHistory((prev) => [
-          ...prev,
-          {
-            type: "bot",
-            message: `Awesome! I've logged your ${duration}-minute ${type} workout. You're staying fit and earning XP!`,
-          },
-        ]);
-      }
-    }
-
-    // Refresh dashboard data if any action was performed
-    if (dashboardActionPerformed) {
+    if (action && action.action === "add_workout" && action.type && action.duration && action.calories) {
+      await addWorkout(action.type, action.duration, action.calories);
+      setChatHistory((prev) => [
+        ...prev,
+        {
+          type: "bot",
+          message: aiResponse,
+        },
+      ]);
       refreshData();
       return;
     }

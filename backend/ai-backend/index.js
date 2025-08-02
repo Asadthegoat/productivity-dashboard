@@ -20,6 +20,7 @@ app.post('/chat', async (req, res) => {
   }
 
   try {
+    const systemPrompt = ""
     const response = await axios.post(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
       {

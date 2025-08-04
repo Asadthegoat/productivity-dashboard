@@ -17,6 +17,7 @@ app.use(express.json());
 
 // Data storage (in production, use a proper database)
 const DATA_FILE = path.join(process.cwd(), 'dashboard-data.json');
+const NEWS_API_KEY = process.env.NEWS_API_KEY;
 
 // Initialize data file if it doesn't exist
 if (!fs.existsSync(DATA_FILE)) {
@@ -28,12 +29,52 @@ if (!fs.existsSync(DATA_FILE)) {
     schedule: [],
     workoutLog: [],
     eatingGoals: [],
+    news: [],
     level: 8,
     xp: 2250,
     maxXp: 3000
   };
   fs.writeFileSync(DATA_FILE, JSON.stringify(initialData, null, 2));
 }
+// Helper to fetch news from NewsAPI
+const fetchNews = async (topics = ["technology", "artificial intelligence"]) => {
+  try {
+    const query = topics.join(" OR ");
+    const url = `https://newsapi.org/v2/top-headlines?language=en&q=${encodeURIComponent(query)}&apiKey=${NEWS_API_KEY}`;
+    const response = await axios.get(url);
+    const articles = response.data.articles.slice(0, 5).map(a => ({
+      title: a.title,
+      source: a.source.name,
+      url: a.url
+    }));
+    return articles;
+  } catch (err) {
+    console.error("Error fetching news:", err.message);
+    return [];
+  }
+};
+
+// Scheduled daily news update at 6am
+import cron from "node-cron";
+cron.schedule("0 6 * * *", async () => {
+  const data = readData();
+  data.news = await fetchNews();
+  writeData(data);
+  console.log("News updated at 6am");
+});
+// News API route
+app.get('/api/news', (req, res) => {
+  const data = readData();
+  res.json(data.news || []);
+});
+
+app.post('/api/news', async (req, res) => {
+  const { topics } = req.body;
+  const data = readData();
+  data.news = await fetchNews(topics && Array.isArray(topics) ? topics : ["technology", "artificial intelligence"]);
+  writeData(data);
+  res.json(data.news);
+});
 
 // Helper functions
 const readData = () => {
@@ -334,6 +375,18 @@ For regular conversation, just respond normally. Always be helpful and motivatio
             });
             return;
           }
+        }
+
+        // Refresh News (AI-triggered)
+        if (actionData.action === 'refresh_news' && Array.isArray(actionData.topics)) {
+          data.news = await fetchNews(actionData.topics);
+          writeData(data);
+          res.json({
+            response: `News section updated for topics: ${actionData.topics.join(", ")}`,
+            action: actionData,
+            news: data.news
+          });
+          return;
         }
       }
     } catch (parseError) {

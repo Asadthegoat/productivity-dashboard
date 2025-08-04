@@ -25,6 +25,12 @@ interface WorkoutLog {
   date: string;
 }
 
+interface NewsItem {
+  title: string;
+  source: string;
+  url: string;
+}
+
 interface DashboardData {
   goals: {
     shortTerm: Goal[];
@@ -33,6 +39,7 @@ interface DashboardData {
   schedule: ScheduleEvent[];
   workoutLog: WorkoutLog[];
   eatingGoals: any[];
+  news: NewsItem[];
   level: number;
   xp: number;
   maxXp: number;
@@ -90,6 +97,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
       { id: 2, type: "Strength", duration: 45, calories: 150, date: new Date().toISOString() },
     ],
     eatingGoals: [],
+    news: [],
     level: 8,
     xp: 2250,
     maxXp: 3000

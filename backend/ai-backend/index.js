@@ -39,6 +39,7 @@ if (!fs.existsSync(DATA_FILE)) {
 // Helper to fetch news from NewsAPI
 const fetchNews = async (topics = ["technology", "artificial intelligence"]) => {
   try {
+    console.log("Fetching news with key:", NEWS_API_KEY, "topics:", topics);
     const query = topics.join(" OR ");
     const url = `https://newsapi.org/v2/top-headlines?language=en&q=${encodeURIComponent(query)}&apiKey=${NEWS_API_KEY}`;
     const response = await axios.get(url);
@@ -380,6 +381,7 @@ For regular conversation, just respond normally. Always be helpful and motivatio
         // Refresh News (AI-triggered)
         if (actionData.action === 'refresh_news' && Array.isArray(actionData.topics)) {
           data.news = await fetchNews(actionData.topics);
+          
           writeData(data);
           res.json({
             response: `News section updated for topics: ${actionData.topics.join(", ")}`,

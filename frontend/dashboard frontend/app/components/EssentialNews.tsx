@@ -2,10 +2,25 @@
 
 import { Newspaper, ExternalLink } from "lucide-react"
 import { useDashboard } from "../context/DashboardContext"
+import { useEffect } from "react"
 
 export default function EssentialNews() {
-  const { data, refreshData } = useDashboard();
+
+  const { data, setData } = useDashboard();
   const newsItems = data?.news || [];
+
+  useEffect(() => {
+    // Fetch news from backend on mount
+    fetch("/api/news")
+      .then(res => res.json())
+      .then(news => {
+        setData(prev => ({ ...prev, news }));
+      })
+      .catch(err => {
+        // Optionally handle error
+        console.error("Failed to fetch news:", err);
+      });
+  }, []);
 
   return (
     <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700">

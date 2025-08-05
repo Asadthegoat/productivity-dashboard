@@ -47,6 +47,7 @@ interface DashboardData {
 
 interface DashboardContextType {
   data: DashboardData;
+  setData: React.Dispatch<React.SetStateAction<DashboardData>>;
   loading: boolean;
   error: string | null;
   refreshData: () => Promise<void>;
@@ -244,6 +245,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
 
   const value: DashboardContextType = {
     data,
+    setData,
     loading,
     error,
     refreshData,

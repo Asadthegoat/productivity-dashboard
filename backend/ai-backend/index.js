@@ -65,9 +65,15 @@ cron.schedule("0 6 * * *", async () => {
   console.log("News updated at 6am");
 });
 // News API route
-app.get('/api/news', (req, res) => {
-  const data = readData();
-  res.json(data.news || []);
+app.get('/api/news', async (req, res) => {
+  try {
+    // Always fetch fresh news for GET requests
+    const news = await fetchNews();
+    res.json(news);
+  } catch (err) {
+    console.error('Error in GET /api/news:', err);
+    res.status(500).json([]);
+  }
 });
 
 app.post('/api/news', async (req, res) => {

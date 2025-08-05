@@ -43,6 +43,7 @@ const fetchNews = async (topics = ["technology", "artificial intelligence"]) => 
     const query = topics.join(" OR ");
     const url = `https://newsapi.org/v2/top-headlines?language=en&q=${encodeURIComponent(query)}&apiKey=${NEWS_API_KEY}`;
     const response = await axios.get(url);
+    console.log("NewsAPI response:", response.data);
     const articles = response.data.articles.slice(0, 5).map(a => ({
       title: a.title,
       source: a.source.name,

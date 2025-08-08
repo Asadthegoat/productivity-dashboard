@@ -1,4 +1,4 @@
-﻿import express from 'express';
+﻿/* import express from 'express';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import cors from "cors";
@@ -407,6 +407,449 @@ For regular conversation, just respond normally. Always be helpful and motivatio
   } catch (error) {
     console.error(error.response?.data || error.message);
     res.status(500).json({ error: 'Failed to get response from Gemini API.' });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`AI Assistant backend running on port ${PORT}`);
+});
+
+
+
+
+*/
+//everything above this line is backedn instructions which work to the extents they were made to. Below is the same code integrated with PostgreSQL and other improvements
+// This is the main entry point for the AI Assistant backend
+import express from 'express';
+import dotenv from 'dotenv';
+import axios from 'axios';
+import cors from "cors";
+import pkg from 'pg';
+import cron from "node-cron";
+
+const { Pool } = pkg;
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const NEWS_API_KEY = process.env.NEWS_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+
+app.use(cors());
+app.use(express.json());
+
+// PostgreSQL connection
+const pool = new Pool({
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  password: process.env.DB_PASSWORD,
+  port: process.env.DB_PORT || 5432,
+});
+
+// Test database connection
+pool.connect((err, client, release) => {
+  if (err) {
+    console.error('Error connecting to PostgreSQL database:', err);
+  } else {
+    console.log('Successfully connected to PostgreSQL database');
+    release();
+  }
+});
+
+// Helper functions for database operations
+const getUserData = async (userId = 1) => {
+  try {
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    const user = userResult.rows[0];
+
+    const goalsResult = await pool.query(
+      'SELECT * FROM goals WHERE user_id = $1 ORDER BY created_at DESC',
+      [userId]
+    );
+    
+    const scheduleResult = await pool.query(
+      'SELECT * FROM schedule_events WHERE user_id = $1 ORDER BY event_date, time',
+      [userId]
+    );
+    
+    const workoutResult = await pool.query(
+      'SELECT * FROM workout_log WHERE user_id = $1 ORDER BY date DESC',
+      [userId]
+    );
+
+    const eatingGoalsResult = await pool.query(
+      'SELECT * FROM eating_goals WHERE user_id = $1',
+      [userId]
+    );
+
+    const newsResult = await pool.query(
+      'SELECT * FROM news_articles ORDER BY fetched_at DESC LIMIT 10'
+    );
+
+    const goals = goalsResult.rows;
+    const shortTermGoals = goals.filter(g => g.type === 'shortTerm');
+    const longTermGoals = goals.filter(g => g.type === 'longTerm');
+
+    return {
+      goals: {
+        shortTerm: shortTermGoals,
+        longTerm: longTermGoals
+      },
+      schedule: scheduleResult.rows,
+      workoutLog: workoutResult.rows,
+      eatingGoals: eatingGoalsResult.rows,
+      news: newsResult.rows,
+      level: user?.level || 1,
+      xp: user?.xp || 0,
+      maxXp: user?.max_xp || 1000
+    };
+  } catch (error) {
+    console.error('Error fetching user data:', error);
+    throw error;
+  }
+};
+
+// Helper to fetch news from NewsAPI
+const fetchNews = async (topics = ["technology", "artificial intelligence"]) => {
+  try {
+    console.log("Fetching news with key:", NEWS_API_KEY, "topics:", topics);
+    const query = topics.join(" OR ");
+    const url = `https://newsapi.org/v2/everything?language=en&q=${encodeURIComponent(query)}&apiKey=${NEWS_API_KEY}`;
+    const response = await axios.get(url);
+    
+    const articles = response.data.articles.slice(0, 5).map(a => ({
+      title: a.title,
+      source: a.source.name,
+      url: a.url,
+      topics: topics
+    }));
+
+    // Store news in database
+    for (const article of articles) {
+      await pool.query(
+        'INSERT INTO news_articles (title, source, url, topics) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+        [article.title, article.source, article.url, article.topics]
+      );
+    }
+
+    return articles;
+  } catch (err) {
+    console.error("Error fetching news:", err.message);
+    return [];
+  }
+};
+
+// Scheduled daily news update at 6am
+cron.schedule("0 6 * * *", async () => {
+  await fetchNews();
+  console.log("News updated at 6am");
+});
+
+// Routes
+app.get('/api/dashboard-data', async (req, res) => {
+  try {
+    const data = await getUserData();
+    res.json(data);
+  } catch (error) {
+    console.error('Error getting dashboard data:', error);
+    res.status(500).json({ error: 'Failed to fetch dashboard data' });
+  }
+});
+
+// News API routes
+app.get('/api/news', async (req, res) => {
+  try {
+    const news = await fetchNews();
+    res.json(news);
+  } catch (err) {
+    console.error('Error in GET /api/news:', err);
+    res.status(500).json([]);
+  }
+});
+
+app.post('/api/news', async (req, res) => {
+  try {
+    const { topics } = req.body;
+    const news = await fetchNews(topics && Array.isArray(topics) ? topics : ["technology", "artificial intelligence"]);
+    res.json(news);
+  } catch (err) {
+    console.error('Error in POST /api/news:', err);
+    res.status(500).json([]);
+  }
+});
+
+// Goals routes
+app.post('/api/goals', async (req, res) => {
+  try {
+    const { type, text, progress = 0, userId = 1 } = req.body;
+    
+    const result = await pool.query(
+      'INSERT INTO goals (user_id, text, type, progress) VALUES ($1, $2, $3, $4) RETURNING *',
+      [userId, text, type, progress]
+    );
+    
+    res.json({ success: true, goal: result.rows[0] });
+  } catch (error) {
+    console.error('Error creating goal:', error);
+    res.status(500).json({ error: 'Failed to save goal' });
+  }
+});
+
+app.put('/api/goals/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { completed, progress, text } = req.body;
+    
+    const result = await pool.query(
+      'UPDATE goals SET completed = $1, progress = $2, text = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *',
+      [completed, progress, text, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Goal not found' });
+    }
+    
+    res.json({ success: true, goal: result.rows[0] });
+  } catch (error) {
+    console.error('Error updating goal:', error);
+    res.status(500).json({ error: 'Failed to update goal' });
+  }
+});
+
+app.delete('/api/goals/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = await pool.query('DELETE FROM goals WHERE id = $1 RETURNING *', [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Goal not found' });
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting goal:', error);
+    res.status(500).json({ error: 'Failed to delete goal' });
+  }
+});
+
+// Schedule routes
+app.post('/api/schedule', async (req, res) => {
+  try {
+    const { time, event, userId = 1 } = req.body;
+    
+    const result = await pool.query(
+      'INSERT INTO schedule_events (user_id, time, event) VALUES ($1, $2, $3) RETURNING *',
+      [userId, time, event]
+    );
+    
+    res.json({ success: true, event: result.rows[0] });
+  } catch (error) {
+    console.error('Error creating schedule event:', error);
+    res.status(500).json({ error: 'Failed to save schedule event' });
+  }
+});
+
+// Workout routes
+app.post('/api/workout', async (req, res) => {
+  try {
+    const { type, duration, calories, userId = 1 } = req.body;
+    
+    // Insert workout
+    const workoutResult = await pool.query(
+      'INSERT INTO workout_log (user_id, type, duration, calories) VALUES ($1, $2, $3, $4) RETURNING *',
+      [userId, type, duration, calories]
+    );
+    
+    // Update user XP and level
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    const user = userResult.rows[0];
+    
+    let newXp = Math.min(user.xp + 50, user.max_xp);
+    let newLevel = user.level;
+    let newMaxXp = user.max_xp;
+    
+    if (newXp >= user.max_xp) {
+      newLevel += 1;
+      newXp = 0;
+      newMaxXp = Math.floor(user.max_xp * 1.2);
+    }
+    
+    await pool.query(
+      'UPDATE users SET xp = $1, level = $2, max_xp = $3 WHERE id = $4',
+      [newXp, newLevel, newMaxXp, userId]
+    );
+    
+    res.json({ 
+      success: true, 
+      workout: workoutResult.rows[0], 
+      level: newLevel, 
+      xp: newXp 
+    });
+  } catch (error) {
+    console.error('Error saving workout:', error);
+    res.status(500).json({ error: 'Failed to save workout' });
+  }
+});
+
+// Chat endpoint (modified to work with database)
+app.post('/chat', async (req, res) => {
+  const { message, userId = 1 } = req.body;
+  if (!message) {
+    return res.status(400).json({ error: 'Message is required.' });
+  }
+
+  try {
+    // Get current dashboard data to provide context to AI
+    const dashboardData = await getUserData(userId);
+    
+    // Create a system prompt that gives the AI context about the dashboard, including actual data
+    const systemPrompt = `You are A.S.A.D (AI-powered Smart Assistant for Dashboard), a productivity assistant that helps users manage their dashboard. You can:
+
+1. Add, update, and delete goals (both short-term and long-term)
+2. Add schedule events
+3. Log workouts
+4. Provide motivational advice
+5. Help with productivity tips
+
+Current dashboard state:
+Short-term goals:
+${dashboardData.goals.shortTerm.map(g => `- ${g.text} (${g.progress}%)`).join('\n')}
+
+Long-term goals:
+${dashboardData.goals.longTerm.map(g => `- ${g.text} (${g.progress}%)`).join('\n')}
+
+Today's schedule:
+${dashboardData.schedule.map(e => `- ${e.time}: ${e.event}`).join('\n')}
+
+Workout log entries: ${dashboardData.workoutLog.length} workouts
+User level: ${dashboardData.level} (${dashboardData.xp}/${dashboardData.maxXp} XP)
+
+When users ask to add goals, schedule events, or log workouts, respond with a JSON action object like:
+{"action": "add_goal", "type": "shortTerm", "text": "goal text", "progress": 0}
+
+For schedule: {"action": "add_schedule", "time": "9:00 AM", "event": "Team Meeting"}
+
+For workout: {"action": "add_workout", "type": "Cardio", "duration": 30, "calories": 200}
+
+For regular conversation, just respond normally. Always be helpful and motivational!`;
+
+    // GROQ API integration
+    const groqPayload = {
+      model: "llama3-8b-8192",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message }
+      ]
+    };
+
+    const response = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      groqPayload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${GROQ_API_KEY}`
+        }
+      }
+    );
+
+    const aiResponse = response.data.choices?.[0]?.message?.content || 'Sorry, I could not generate a response.';
+    
+    // Check if the response contains a JSON action
+    try {
+      const actionMatch = aiResponse.match(/\{.*\}/s);
+      if (actionMatch) {
+        const actionData = JSON.parse(actionMatch[0]);
+
+        // Add Goal
+        if (actionData.action === 'add_goal') {
+          const result = await pool.query(
+            'INSERT INTO goals (user_id, text, type, progress) VALUES ($1, $2, $3, $4) RETURNING *',
+            [userId, actionData.text, actionData.type, actionData.progress || 0]
+          );
+          
+          res.json({ 
+            response: `Great! I've added "${actionData.text}" to your ${actionData.type} goals. Keep up the great work!`,
+            action: actionData,
+            data: result.rows[0]
+          });
+          return;
+        }
+
+        // Add Schedule
+        if (actionData.action === 'add_schedule') {
+          const result = await pool.query(
+            'INSERT INTO schedule_events (user_id, time, event) VALUES ($1, $2, $3) RETURNING *',
+            [userId, actionData.time, actionData.event]
+          );
+          
+          res.json({ 
+            response: `Perfect! I've added "${actionData.event}" at ${actionData.time} to your schedule.`,
+            action: actionData,
+            data: result.rows[0]
+          });
+          return;
+        }
+
+        // Add Workout
+        if (actionData.action === 'add_workout') {
+          const workoutResult = await pool.query(
+            'INSERT INTO workout_log (user_id, type, duration, calories) VALUES ($1, $2, $3, $4) RETURNING *',
+            [userId, actionData.type, actionData.duration, actionData.calories]
+          );
+
+          // Update user XP and level
+          const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+          const user = userResult.rows[0];
+          
+          let newXp = Math.min(user.xp + 50, user.max_xp);
+          let newLevel = user.level;
+          let newMaxXp = user.max_xp;
+          
+          if (newXp >= user.max_xp) {
+            newLevel += 1;
+            newXp = 0;
+            newMaxXp = Math.floor(user.max_xp * 1.2);
+          }
+          
+          await pool.query(
+            'UPDATE users SET xp = $1, level = $2, max_xp = $3 WHERE id = $4',
+            [newXp, newLevel, newMaxXp, userId]
+          );
+
+          res.json({ 
+            response: `Excellent! I've logged your ${actionData.type} workout. You're making great progress!`,
+            action: actionData,
+            data: workoutResult.rows[0],
+            level: newLevel,
+            xp: newXp
+          });
+          return;
+        }
+
+        // Refresh News
+        if (actionData.action === 'refresh_news' && Array.isArray(actionData.topics)) {
+          const news = await fetchNews(actionData.topics);
+          
+          res.json({
+            response: `News section updated for topics: ${actionData.topics.join(", ")}`,
+            action: actionData,
+            news: news
+          });
+          return;
+        }
+      }
+    } catch (parseError) {
+      console.log('No action JSON found in response');
+    }
+    
+    res.json({ response: aiResponse });
+  } catch (error) {
+    console.error(error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to get response from AI.' });
   }
 });
 

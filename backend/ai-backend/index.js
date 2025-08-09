@@ -443,17 +443,35 @@ app.use(express.json());
 console.log('=== DATABASE CONNECTION DEBUG ===');
 console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
 console.log('DATABASE_URL (masked):', process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/:[^:@]*@/, ':***@') : 'NOT SET');
-console.log('DB_SSL:', process.env.DB_SSL);
-console.log('NODE_ENV:', process.env.NODE_ENV);
 
-// PostgreSQL connection
-const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT || 5432,
-});
+// Parse DATABASE_URL manually to ensure it's used correctly
+const parseConnectionString = (url) => {
+  const parsed = new URL(url);
+  return {
+    user: parsed.username,
+    password: parsed.password,
+    host: parsed.hostname,
+    port: parsed.port || 5432,
+    database: parsed.pathname.slice(1), // Remove leading slash
+    ssl: { rejectUnauthorized: false }
+  };
+};
+
+// PostgreSQL connection - parse DATABASE_URL explicitly
+const pool = new Pool(
+  process.env.DATABASE_URL 
+    ? parseConnectionString(process.env.DATABASE_URL)
+    : {
+        user: process.env.DB_USER,
+        host: process.env.DB_HOST,
+        database: process.env.DB_NAME,
+        password: process.env.DB_PASSWORD,
+        port: process.env.DB_PORT || 5432,
+        ssl: { rejectUnauthorized: false }
+      }
+);
+
+console.log('Connecting to host:', process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL).hostname : process.env.DB_HOST);
 
 // Test database connection
 pool.connect((err, client, release) => {

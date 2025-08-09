@@ -439,6 +439,13 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 app.use(cors());
 app.use(express.json());
 
+// Debug logging to see what's actually being used
+console.log('=== DATABASE CONNECTION DEBUG ===');
+console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log('DATABASE_URL (masked):', process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/:[^:@]*@/, ':***@') : 'NOT SET');
+console.log('DB_SSL:', process.env.DB_SSL);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+
 // PostgreSQL connection
 const pool = new Pool({
   user: process.env.DB_USER,

@@ -741,10 +741,10 @@ app.post('/chat', async (req, res) => {
 
 Current dashboard state:
 Short-term goals:
-${dashboardData.goals.shortTerm.map(g => `- ${g.text} (${g.progress}%)`).join('\n')}
+${dashboardData.goals.shortTerm.map(g => `- ID:${g.id} "${g.text}" (${g.progress}%) ${g.completed ? '[COMPLETED]' : ''}`).join('\n')}
 
 Long-term goals:
-${dashboardData.goals.longTerm.map(g => `- ${g.text} (${g.progress}%)`).join('\n')}
+${dashboardData.goals.longTerm.map(g => `- ID:${g.id} "${g.text}" (${g.progress}%) ${g.completed ? '[COMPLETED]' : ''}`).join('\n')}
 
 Today's schedule:
 ${dashboardData.schedule.map(e => `- ${e.time}: ${e.event}`).join('\n')}
@@ -752,14 +752,15 @@ ${dashboardData.schedule.map(e => `- ${e.time}: ${e.event}`).join('\n')}
 Workout log entries: ${dashboardData.workoutLog.length} workouts
 User level: ${dashboardData.level} (${dashboardData.xp}/${dashboardData.maxXp} XP)
 
-When users ask to add goals, schedule events, or log workouts, respond with a JSON action object like:
-{"action": "add_goal", "type": "shortTerm", "text": "goal text", "progress": 0}
+Available actions (respond with JSON when users request these):
 
-For schedule: {"action": "add_schedule", "time": "9:00 AM", "event": "Team Meeting"}
+ADD GOAL: {"action": "add_goal", "type": "shortTerm", "text": "goal text", "progress": 0}
+DELETE GOAL: {"action": "delete_goal", "id": goal_id_number}
+UPDATE GOAL: {"action": "update_goal", "id": goal_id_number, "completed": true, "progress": 100}
+ADD SCHEDULE: {"action": "add_schedule", "time": "9:00 AM", "event": "Team Meeting"}
+ADD WORKOUT: {"action": "add_workout", "type": "Cardio", "duration": 30, "calories": 200}
 
-For workout: {"action": "add_workout", "type": "Cardio", "duration": 30, "calories": 200}
-
-For regular conversation, just respond normally. Always be helpful and motivational!`;
+When users want to delete or complete goals, use the goal ID numbers shown above. For regular conversation, just respond normally. Always be helpful and motivational!`;
 
     // GROQ API integration
     const groqPayload = {
@@ -851,6 +852,53 @@ For regular conversation, just respond normally. Always be helpful and motivatio
             data: workoutResult.rows[0],
             level: newLevel,
             xp: newXp
+          });
+          return;
+        }
+
+        // Delete Goal
+        if (actionData.action === 'delete_goal') {
+          const result = await pool.query(
+            'DELETE FROM goals WHERE id = $1 AND user_id = $2 RETURNING *',
+            [actionData.id, userId]
+          );
+          
+          if (result.rows.length === 0) {
+            res.json({ 
+              response: "I couldn't find that goal to delete. It might have already been removed.",
+              action: actionData
+            });
+            return;
+          }
+          
+          res.json({ 
+            response: `I've successfully deleted the goal "${result.rows[0].text}". Keep focusing on your other goals!`,
+            action: actionData,
+            data: result.rows[0]
+          });
+          return;
+        }
+
+        // Complete/Update Goal
+        if (actionData.action === 'update_goal') {
+          const result = await pool.query(
+            'UPDATE goals SET completed = $1, progress = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND user_id = $4 RETURNING *',
+            [actionData.completed, actionData.progress, actionData.id, userId]
+          );
+          
+          if (result.rows.length === 0) {
+            res.json({ 
+              response: "I couldn't find that goal to update.",
+              action: actionData
+            });
+            return;
+          }
+          
+          const status = actionData.completed ? 'completed' : `updated to ${actionData.progress}% progress`;
+          res.json({ 
+            response: `Great! I've ${status} your goal "${result.rows[0].text}".`,
+            action: actionData,
+            data: result.rows[0]
           });
           return;
         }

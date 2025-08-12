@@ -1,6 +1,7 @@
 "use client"
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
+import { io, Socket } from 'socket.io-client';
 
 interface Goal {
   id: number;
@@ -14,6 +15,7 @@ interface ScheduleEvent {
   id: number;
   time: string;
   event: string;
+  type?: string;
   createdAt: string;
 }
 
@@ -29,6 +31,14 @@ interface NewsItem {
   title: string;
   source: string;
   url: string;
+  topics?: string[];
+}
+
+interface ChatMessage {
+  type: 'user' | 'ai' | 'bot';
+  message: string;
+  timestamp: Date;
+  userId?: number;
 }
 
 interface DashboardData {
@@ -50,6 +60,10 @@ interface DashboardContextType {
   setData: React.Dispatch<React.SetStateAction<DashboardData>>;
   loading: boolean;
   error: string | null;
+  isConnected: boolean;
+  chatMessages: ChatMessage[];
+  
+  // Data modification functions
   refreshData: () => Promise<void>;
   addGoal: (type: 'shortTerm' | 'longTerm', text: string, progress?: number) => Promise<void>;
   updateGoal: (id: number, updates: Partial<Goal>) => Promise<void>;
@@ -58,6 +72,10 @@ interface DashboardContextType {
   updateScheduleEvent?: (id: number, time: string, event: string, type?: string) => Promise<void>;
   deleteScheduleEvent?: (id: number) => Promise<void>;
   addWorkout: (type: string, duration: number, calories: number) => Promise<void>;
+  
+  // Chat functions
+  sendChatMessage: (message: string) => Promise<void>;
+  setChatMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 }
 
 const DashboardContext = createContext<DashboardContextType | undefined>(undefined);
@@ -72,9 +90,15 @@ export const useDashboard = () => {
 
 interface DashboardProviderProps {
   children: ReactNode;
+  serverUrl?: string;
+  userId?: number;
 }
 
-export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }) => {
+export const DashboardProvider: React.FC<DashboardProviderProps> = ({ 
+  children,
+  serverUrl = "https://productivity-dashboard-218x.onrender.com",
+  userId = 1
+}) => {
   const [data, setData] = useState<DashboardData>({
     goals: { 
       shortTerm: [
@@ -103,32 +127,193 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
     xp: 2250,
     maxXp: 3000
   });
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    { 
+      type: "bot", 
+      message: "Hello! I'm A.S.A.D, your productivity assistant. How can I help you today?", 
+      timestamp: new Date()
+    },
+    { 
+      type: "user", 
+      message: "What should I focus on today?", 
+      timestamp: new Date()
+    },
+    {
+      type: "bot",
+      message: "Based on your goals, I recommend focusing on your project proposal first, then your workout. You're making great progress!",
+      timestamp: new Date()
+    },
+  ]);
+
+  const socketRef = useRef<Socket | null>(null);
+  const isInitialMount = useRef(true);
+
+  // Initialize WebSocket connection
+  useEffect(() => {
+    const initSocket = () => {
+      console.log('Initializing WebSocket connection to:', serverUrl);
+      
+      const socket = io(serverUrl, {
+        transports: ['websocket', 'polling'],
+        timeout: 20000,
+        forceNew: true,
+      });
+
+      socketRef.current = socket;
+
+      // Connection events
+      socket.on('connect', () => {
+        console.log('Connected to WebSocket server');
+        setIsConnected(true);
+        setError(null);
+        
+        // Join user-specific room
+        socket.emit('join-user', userId);
+        
+        // Request initial dashboard data
+        socket.emit('request-dashboard-data', userId);
+      });
+
+      socket.on('disconnect', () => {
+        console.log('Disconnected from WebSocket server');
+        setIsConnected(false);
+      });
+
+      socket.on('connect_error', (error) => {
+        console.error('WebSocket connection error:', error);
+        setError('Connection failed. Using local data only.');
+        setIsConnected(false);
+      });
+
+      // Dashboard data updates
+      socket.on('dashboard-update', (newData: Partial<DashboardData>) => {
+        console.log('Dashboard data updated:', newData);
+        setData(prev => ({ ...prev, ...newData }));
+      });
+
+      // Chat messages
+      socket.on('chat-message', (message: ChatMessage) => {
+        console.log('Chat message received:', message);
+        setChatMessages(prev => {
+          // Avoid duplicate messages
+          const isDuplicate = prev.some(msg => 
+            msg.message === message.message && 
+            Math.abs(new Date(msg.timestamp).getTime() - new Date(message.timestamp).getTime()) < 1000
+          );
+          
+          if (isDuplicate) return prev;
+          return [...prev, { ...message, timestamp: new Date(message.timestamp) }];
+        });
+      });
+
+      // News updates
+      socket.on('news-update', (news: NewsItem[]) => {
+        console.log('News updated:', news);
+        setData(prev => ({ ...prev, news }));
+      });
+
+      // Error handling
+      socket.on('error', (error: any) => {
+        console.error('WebSocket error:', error);
+        setError(error.message || 'An error occurred');
+      });
+    };
+
+    initSocket();
+
+    return () => {
+      if (socketRef.current) {
+        console.log('Cleaning up WebSocket connection');
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
+  }, [serverUrl, userId]);
+
+  // Load initial dashboard data from API
+  useEffect(() => {
+    const loadDashboardData = async () => {
+      if (!isInitialMount.current) return;
+      isInitialMount.current = false;
+
+      setLoading(true);
+      try {
+        const response = await fetch(`${serverUrl}/api/dashboard-data`);
+        if (response.ok) {
+          const dashboardData = await response.json();
+          console.log('Loaded dashboard data:', dashboardData);
+          setData(dashboardData);
+        } else {
+          console.warn('Failed to load dashboard data, using default data');
+        }
+      } catch (err) {
+        console.error('Error loading dashboard data:', err);
+        setError('Failed to load dashboard data. Using local data.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadDashboardData();
+  }, [serverUrl]);
 
   const refreshData = async () => {
-    // For now, just refresh the local state
     setLoading(true);
-    setTimeout(() => setLoading(false), 500);
+    try {
+      const response = await fetch(`${serverUrl}/api/dashboard-data`);
+      if (response.ok) {
+        const dashboardData = await response.json();
+        setData(dashboardData);
+      }
+      
+      // Also request via WebSocket if connected
+      if (socketRef.current && isConnected) {
+        socketRef.current.emit('request-dashboard-data', userId);
+      }
+    } catch (err) {
+      console.error('Error refreshing data:', err);
+      setError('Failed to refresh data');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const addGoal = async (type: 'shortTerm' | 'longTerm', text: string, progress: number = 0) => {
     try {
-      const newGoal = {
-        id: Date.now(),
-        text,
-        completed: false,
-        progress,
-        createdAt: new Date().toISOString()
-      };
+      const response = await fetch(`${serverUrl}/api/goals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, text, progress, userId })
+      });
+
+      if (!response.ok) throw new Error('Failed to add goal');
       
-      setData(prev => ({
-        ...prev,
-        goals: {
-          ...prev.goals,
-          [type]: [...prev.goals[type], newGoal]
-        }
-      }));
+      const result = await response.json();
+      console.log('Goal added:', result);
+      
+      // Data will be updated via WebSocket
+      if (!isConnected) {
+        // Fallback for when WebSocket is not connected
+        const newGoal = {
+          id: Date.now(),
+          text,
+          completed: false,
+          progress,
+          createdAt: new Date().toISOString()
+        };
+        
+        setData(prev => ({
+          ...prev,
+          goals: {
+            ...prev.goals,
+            [type]: [...prev.goals[type], newGoal]
+          }
+        }));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add goal');
       throw err;
@@ -137,17 +322,32 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
 
   const updateGoal = async (id: number, updates: Partial<Goal>) => {
     try {
-      setData(prev => ({
-        ...prev,
-        goals: {
-          shortTerm: prev.goals.shortTerm.map(goal => 
-            goal.id === id ? { ...goal, ...updates } : goal
-          ),
-          longTerm: prev.goals.longTerm.map(goal => 
-            goal.id === id ? { ...goal, ...updates } : goal
-          )
-        }
-      }));
+      const response = await fetch(`${serverUrl}/api/goals/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...updates, userId })
+      });
+
+      if (!response.ok) throw new Error('Failed to update goal');
+      
+      const result = await response.json();
+      console.log('Goal updated:', result);
+      
+      // Data will be updated via WebSocket
+      if (!isConnected) {
+        // Fallback for when WebSocket is not connected
+        setData(prev => ({
+          ...prev,
+          goals: {
+            shortTerm: prev.goals.shortTerm.map(goal => 
+              goal.id === id ? { ...goal, ...updates } : goal
+            ),
+            longTerm: prev.goals.longTerm.map(goal => 
+              goal.id === id ? { ...goal, ...updates } : goal
+            )
+          }
+        }));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update goal');
       throw err;
@@ -156,13 +356,25 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
 
   const deleteGoal = async (id: number) => {
     try {
-      setData(prev => ({
-        ...prev,
-        goals: {
-          shortTerm: prev.goals.shortTerm.filter(goal => goal.id !== id),
-          longTerm: prev.goals.longTerm.filter(goal => goal.id !== id)
-        }
-      }));
+      const response = await fetch(`${serverUrl}/api/goals/${id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      });
+
+      if (!response.ok) throw new Error('Failed to delete goal');
+      
+      // Data will be updated via WebSocket
+      if (!isConnected) {
+        // Fallback for when WebSocket is not connected
+        setData(prev => ({
+          ...prev,
+          goals: {
+            shortTerm: prev.goals.shortTerm.filter(goal => goal.id !== id),
+            longTerm: prev.goals.longTerm.filter(goal => goal.id !== id)
+          }
+        }));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete goal');
       throw err;
@@ -171,17 +383,29 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
 
   const addScheduleEvent = async (time: string, event: string, type: string = "work") => {
     try {
-      const newEvent = {
-        id: Date.now(),
-        time,
-        event,
-        type,
-        createdAt: new Date().toISOString()
-      };
-      setData(prev => ({
-        ...prev,
-        schedule: [...prev.schedule, newEvent]
-      }));
+      const response = await fetch(`${serverUrl}/api/schedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ time, event, type, userId })
+      });
+
+      if (!response.ok) throw new Error('Failed to add schedule event');
+      
+      // Data will be updated via WebSocket
+      if (!isConnected) {
+        // Fallback for when WebSocket is not connected
+        const newEvent = {
+          id: Date.now(),
+          time,
+          event,
+          type,
+          createdAt: new Date().toISOString()
+        };
+        setData(prev => ({
+          ...prev,
+          schedule: [...prev.schedule, newEvent]
+        }));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add schedule event');
       throw err;
@@ -190,55 +414,150 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
 
   const updateScheduleEvent = async (id: number, time: string, event: string, type: string = "work") => {
     try {
+      // Note: You'll need to add this endpoint to your backend
+      const response = await fetch(`${serverUrl}/api/schedule/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ time, event, type, userId })
+      });
+
+      if (!response.ok) {
+        // Fallback to local update if endpoint doesn't exist
+        setData(prev => ({
+          ...prev,
+          schedule: prev.schedule.map(ev =>
+            ev.id === id ? { ...ev, time, event, type } : ev
+          )
+        }));
+        return;
+      }
+      
+      // Data will be updated via WebSocket
+    } catch (err) {
+      // Fallback to local update
       setData(prev => ({
         ...prev,
         schedule: prev.schedule.map(ev =>
           ev.id === id ? { ...ev, time, event, type } : ev
         )
       }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update schedule event');
-      throw err;
     }
   };
 
   const deleteScheduleEvent = async (id: number) => {
     try {
+      // Note: You'll need to add this endpoint to your backend
+      const response = await fetch(`${serverUrl}/api/schedule/${id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      });
+
+      if (!response.ok) {
+        // Fallback to local deletion if endpoint doesn't exist
+        setData(prev => ({
+          ...prev,
+          schedule: prev.schedule.filter(ev => ev.id !== id)
+        }));
+        return;
+      }
+      
+      // Data will be updated via WebSocket
+    } catch (err) {
+      // Fallback to local deletion
       setData(prev => ({
         ...prev,
         schedule: prev.schedule.filter(ev => ev.id !== id)
       }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete schedule event');
-      throw err;
     }
   };
 
   const addWorkout = async (type: string, duration: number, calories: number) => {
     try {
-      const newWorkout = {
-        id: Date.now(),
-        type,
-        duration,
-        calories,
-        date: new Date().toISOString()
-      };
-      
-      setData(prev => {
-        const newXp = Math.min(prev.xp + 50, prev.maxXp);
-        const newLevel = newXp >= prev.maxXp ? prev.level + 1 : prev.level;
-        const newMaxXp = newXp >= prev.maxXp ? Math.floor(prev.maxXp * 1.2) : prev.maxXp;
-        
-        return {
-          ...prev,
-          workoutLog: [...prev.workoutLog, newWorkout],
-          xp: newXp >= prev.maxXp ? 0 : newXp,
-          level: newLevel,
-          maxXp: newMaxXp
-        };
+      const response = await fetch(`${serverUrl}/api/workout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, duration, calories, userId })
       });
+
+      if (!response.ok) throw new Error('Failed to add workout');
+      
+      const result = await response.json();
+      console.log('Workout added:', result);
+      
+      // Data will be updated via WebSocket
+      if (!isConnected) {
+        // Fallback for when WebSocket is not connected
+        const newWorkout = {
+          id: Date.now(),
+          type,
+          duration,
+          calories,
+          date: new Date().toISOString()
+        };
+        
+        setData(prev => {
+          const newXp = Math.min(prev.xp + 50, prev.maxXp);
+          const newLevel = newXp >= prev.maxXp ? prev.level + 1 : prev.level;
+          const newMaxXp = newXp >= prev.maxXp ? Math.floor(prev.maxXp * 1.2) : prev.maxXp;
+          
+          return {
+            ...prev,
+            workoutLog: [...prev.workoutLog, newWorkout],
+            xp: newXp >= prev.maxXp ? 0 : newXp,
+            level: newLevel,
+            maxXp: newMaxXp
+          };
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add workout');
+      throw err;
+    }
+  };
+
+  const sendChatMessage = async (message: string) => {
+    if (!message.trim()) return;
+
+    const userMessage: ChatMessage = {
+      type: 'user',
+      message,
+      timestamp: new Date(),
+      userId
+    };
+
+    // Add user message immediately
+    setChatMessages(prev => [...prev, userMessage]);
+
+    try {
+      const response = await fetch(`${serverUrl}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, userId })
+      });
+
+      if (!response.ok) throw new Error('Failed to send message');
+      
+      const result = await response.json();
+      
+      // Add AI response if not received via WebSocket
+      if (!isConnected && result.response) {
+        const aiMessage: ChatMessage = {
+          type: 'ai',
+          message: result.response,
+          timestamp: new Date(),
+          userId
+        };
+        setChatMessages(prev => [...prev, aiMessage]);
+      }
+    } catch (err) {
+      const errorMessage: ChatMessage = {
+        type: 'ai',
+        message: 'Sorry, I could not process your request at the moment.',
+        timestamp: new Date(),
+        userId
+      };
+      setChatMessages(prev => [...prev, errorMessage]);
       throw err;
     }
   };
@@ -248,6 +567,9 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
     setData,
     loading,
     error,
+    isConnected,
+    chatMessages,
+    setChatMessages,
     refreshData,
     addGoal,
     updateGoal,
@@ -255,7 +577,8 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
     addScheduleEvent,
     updateScheduleEvent,
     deleteScheduleEvent,
-    addWorkout
+    addWorkout,
+    sendChatMessage
   };
 
   return (
@@ -263,4 +586,4 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({ children }
       {children}
     </DashboardContext.Provider>
   );
-}; 
+};

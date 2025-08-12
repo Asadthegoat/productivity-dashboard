@@ -426,11 +426,21 @@ import axios from 'axios';
 import cors from "cors";
 import pkg from 'pg';
 import cron from "node-cron";
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 
 const { Pool } = pkg;
 dotenv.config();
 
 const app = express();
+const server = createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    methods: ["GET", "POST"]
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const NEWS_API_KEY = process.env.NEWS_API_KEY;
@@ -536,6 +546,62 @@ const getUserData = async (userId = 1) => {
   }
 };
 
+// WebSocket connection handling
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
+  
+  // Join user-specific room (optional, for multi-user support)
+  socket.on('join-user', (userId) => {
+    socket.join(`user-${userId}`);
+    console.log(`User ${userId} joined their room`);
+  });
+
+  // Send initial dashboard data
+  socket.on('request-dashboard-data', async (userId = 1) => {
+    try {
+      const data = await getUserData(userId);
+      socket.emit('dashboard-update', data);
+    } catch (error) {
+      socket.emit('error', { message: 'Failed to fetch dashboard data' });
+    }
+  });
+
+  // Handle real-time chat
+  socket.on('chat-message', (data) => {
+    // Broadcast chat message to all clients (or specific room)
+    socket.broadcast.emit('chat-message', {
+      message: data.message,
+      timestamp: new Date(),
+      type: 'user'
+    });
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+});
+
+// Helper function to broadcast data updates to all connected clients
+const broadcastUpdate = async (eventType, data, userId = null) => {
+  if (userId) {
+    // Send to specific user's room
+    io.to(`user-${userId}`).emit(eventType, data);
+  } else {
+    // Broadcast to all clients
+    io.emit(eventType, data);
+  }
+};
+
+// Helper function to broadcast dashboard updates
+const broadcastDashboardUpdate = async (userId = 1) => {
+  try {
+    const data = await getUserData(userId);
+    broadcastUpdate('dashboard-update', data, userId);
+  } catch (error) {
+    console.error('Error broadcasting dashboard update:', error);
+  }
+};
+
 // Helper to fetch news from NewsAPI
 const fetchNews = async (topics = ["technology", "artificial intelligence"]) => {
   try {
@@ -558,6 +624,9 @@ const fetchNews = async (topics = ["technology", "artificial intelligence"]) => 
         [article.title, article.source, article.url, article.topics]
       );
     }
+
+    // Broadcast news update to all clients
+    broadcastUpdate('news-update', articles);
 
     return articles;
   } catch (err) {
@@ -615,6 +684,9 @@ app.post('/api/goals', async (req, res) => {
       [userId, text, type, progress]
     );
     
+    // Broadcast dashboard update to all clients
+    await broadcastDashboardUpdate(userId);
+    
     res.json({ success: true, goal: result.rows[0] });
   } catch (error) {
     console.error('Error creating goal:', error);
@@ -625,7 +697,7 @@ app.post('/api/goals', async (req, res) => {
 app.put('/api/goals/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { completed, progress, text } = req.body;
+    const { completed, progress, text, userId = 1 } = req.body;
     
     const result = await pool.query(
       'UPDATE goals SET completed = $1, progress = $2, text = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *',
@@ -635,6 +707,9 @@ app.put('/api/goals/:id', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Goal not found' });
     }
+    
+    // Broadcast dashboard update to all clients
+    await broadcastDashboardUpdate(userId);
     
     res.json({ success: true, goal: result.rows[0] });
   } catch (error) {
@@ -646,12 +721,16 @@ app.put('/api/goals/:id', async (req, res) => {
 app.delete('/api/goals/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const { userId = 1 } = req.body;
     
     const result = await pool.query('DELETE FROM goals WHERE id = $1 RETURNING *', [id]);
     
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Goal not found' });
     }
+    
+    // Broadcast dashboard update to all clients
+    await broadcastDashboardUpdate(userId);
     
     res.json({ success: true });
   } catch (error) {
@@ -669,6 +748,9 @@ app.post('/api/schedule', async (req, res) => {
       'INSERT INTO schedule_events (user_id, time, event) VALUES ($1, $2, $3) RETURNING *',
       [userId, time, event]
     );
+    
+    // Broadcast dashboard update to all clients
+    await broadcastDashboardUpdate(userId);
     
     res.json({ success: true, event: result.rows[0] });
   } catch (error) {
@@ -707,6 +789,9 @@ app.post('/api/workout', async (req, res) => {
       [newXp, newLevel, newMaxXp, userId]
     );
     
+    // Broadcast dashboard update to all clients
+    await broadcastDashboardUpdate(userId);
+    
     res.json({ 
       success: true, 
       workout: workoutResult.rows[0], 
@@ -719,7 +804,7 @@ app.post('/api/workout', async (req, res) => {
   }
 });
 
-// Chat endpoint (modified to work with database)
+// Enhanced Chat endpoint with WebSocket broadcasting
 app.post('/chat', async (req, res) => {
   const { message, userId = 1 } = req.body;
   if (!message) {
@@ -727,6 +812,14 @@ app.post('/chat', async (req, res) => {
   }
 
   try {
+    // Broadcast user message to all connected clients
+    broadcastUpdate('chat-message', {
+      message,
+      timestamp: new Date(),
+      type: 'user',
+      userId
+    });
+
     // Get current dashboard data to provide context to AI
     const dashboardData = await getUserData(userId);
     
@@ -799,6 +892,14 @@ For general conversation (not actions), respond normally and motivationally.`;
 
     const aiResponse = response.data.choices?.[0]?.message?.content || 'Sorry, I could not generate a response.';
     
+    // Broadcast AI response to all connected clients
+    broadcastUpdate('chat-message', {
+      message: aiResponse,
+      timestamp: new Date(),
+      type: 'ai',
+      userId
+    });
+    
     // Check if the response contains a JSON action
     try {
       const actionMatch = aiResponse.match(/\{.*\}/s);
@@ -811,6 +912,9 @@ For general conversation (not actions), respond normally and motivationally.`;
             'INSERT INTO goals (user_id, text, type, progress) VALUES ($1, $2, $3, $4) RETURNING *',
             [userId, actionData.text, actionData.type, actionData.progress || 0]
           );
+          
+          // Broadcast dashboard update
+          await broadcastDashboardUpdate(userId);
           
           res.json({ 
             response: `Great! I've added "${actionData.text}" to your ${actionData.type} goals. Keep up the great work!`,
@@ -826,6 +930,9 @@ For general conversation (not actions), respond normally and motivationally.`;
             'INSERT INTO schedule_events (user_id, time, event) VALUES ($1, $2, $3) RETURNING *',
             [userId, actionData.time, actionData.event]
           );
+          
+          // Broadcast dashboard update
+          await broadcastDashboardUpdate(userId);
           
           res.json({ 
             response: `Perfect! I've added "${actionData.event}" at ${actionData.time} to your schedule.`,
@@ -861,6 +968,9 @@ For general conversation (not actions), respond normally and motivationally.`;
             [newXp, newLevel, newMaxXp, userId]
           );
 
+          // Broadcast dashboard update
+          await broadcastDashboardUpdate(userId);
+
           res.json({ 
             response: `Excellent! I've logged your ${actionData.type} workout. You're making great progress!`,
             action: actionData,
@@ -886,6 +996,9 @@ For general conversation (not actions), respond normally and motivationally.`;
             return;
           }
           
+          // Broadcast dashboard update
+          await broadcastDashboardUpdate(userId);
+          
           res.json({ 
             response: `I've successfully deleted the goal "${result.rows[0].text}". Keep focusing on your other goals!`,
             action: actionData,
@@ -908,6 +1021,9 @@ For general conversation (not actions), respond normally and motivationally.`;
             });
             return;
           }
+          
+          // Broadcast dashboard update
+          await broadcastDashboardUpdate(userId);
           
           const status = actionData.completed ? 'completed' : `updated to ${actionData.progress}% progress`;
           res.json({ 
@@ -941,6 +1057,7 @@ For general conversation (not actions), respond normally and motivationally.`;
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`AI Assistant backend running on port ${PORT}`);
+// Use server.listen instead of app.listen for WebSocket support
+server.listen(PORT, () => {
+  console.log(`AI Assistant backend with WebSocket support running on port ${PORT}`);
 });

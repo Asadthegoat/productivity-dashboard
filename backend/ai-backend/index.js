@@ -826,7 +826,7 @@ app.post('/chat', async (req, res) => {
     // Create a system prompt that gives the AI context about the dashboard, including actual data
     const systemPrompt = `You are A.S.A.D (AI-powered Smart Assistant for Dashboard), a productivity assistant that helps users manage their dashboard.
 
-IMPORTANT: When users ask you to ADD, DELETE, UPDATE, or COMPLETE goals/schedules/workouts, you MUST respond with ONLY the JSON action object, followed by a brief message.
+IMPORTANT: When users ask you to ADD, DELETE, UPDATE, or COMPLETE goals/schedules/workouts, you MUST respond with ONLY the JSON action object, followed by a brief message. The user should NOT be able to see the JSON message. 
 
 Current dashboard state:
 Short-term goals:

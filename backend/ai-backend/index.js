@@ -82,24 +82,25 @@ const getUserData = async (userId = 1) => {
       'SELECT * FROM goals WHERE user_id = $1 ORDER BY created_at DESC',
       [userId]
     );
-    
     const scheduleResult = await pool.query(
       'SELECT * FROM schedule_events WHERE user_id = $1 ORDER BY event_date, time',
       [userId]
     );
-    
     const workoutResult = await pool.query(
       'SELECT * FROM workout_log WHERE user_id = $1 ORDER BY date DESC',
       [userId]
     );
-
     const eatingGoalsResult = await pool.query(
       'SELECT * FROM eating_goals WHERE user_id = $1',
       [userId]
     );
-
     const newsResult = await pool.query(
       'SELECT * FROM news_articles ORDER BY fetched_at DESC LIMIT 10'
+    );
+    // Fetch calendar events
+    const calendarResult = await pool.query(
+      'SELECT * FROM calendar_events WHERE user_id = $1 ORDER BY start_time ASC',
+      [userId]
     );
 
     const goals = goalsResult.rows;
@@ -115,6 +116,7 @@ const getUserData = async (userId = 1) => {
       workoutLog: workoutResult.rows,
       eatingGoals: eatingGoalsResult.rows,
       news: newsResult.rows,
+      calendar: calendarResult.rows,
       level: user?.level || 1,
       xp: user?.xp || 0,
       maxXp: user?.max_xp || 1000
@@ -124,6 +126,69 @@ const getUserData = async (userId = 1) => {
     throw error;
   }
 };
+// Calendar API endpoints
+app.post('/api/calendar', async (req, res) => {
+  try {
+    const { title, description, start_time, end_time, all_day = false, userId = 1 } = req.body;
+    const result = await pool.query(
+      `INSERT INTO calendar_events (user_id, title, description, start_time, end_time, all_day)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [userId, title, description, start_time, end_time, all_day]
+    );
+    await broadcastDashboardUpdate(userId);
+    res.json({ success: true, event: result.rows[0] });
+  } catch (error) {
+    console.error('Error creating calendar event:', error);
+    res.status(500).json({ error: 'Failed to save calendar event' });
+  }
+});
+
+app.get('/api/calendar', async (req, res) => {
+  try {
+    const { userId = 1 } = req.query;
+    const result = await pool.query(
+      'SELECT * FROM calendar_events WHERE user_id = $1 ORDER BY start_time ASC',
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching calendar events:', error);
+    res.status(500).json([]);
+  }
+});
+
+app.put('/api/calendar/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, start_time, end_time, all_day = false, userId = 1 } = req.body;
+    const result = await pool.query(
+      `UPDATE calendar_events SET title=$1, description=$2, start_time=$3, end_time=$4, all_day=$5
+       WHERE id=$6 AND user_id=$7 RETURNING *`,
+      [title, description, start_time, end_time, all_day, id, userId]
+    );
+    await broadcastDashboardUpdate(userId);
+    res.json({ success: true, event: result.rows[0] });
+  } catch (error) {
+    console.error('Error updating calendar event:', error);
+    res.status(500).json({ error: 'Failed to update calendar event' });
+  }
+});
+
+app.delete('/api/calendar/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId = 1 } = req.body;
+    const result = await pool.query(
+      'DELETE FROM calendar_events WHERE id = $1 AND user_id = $2 RETURNING *',
+      [id, userId]
+    );
+    await broadcastDashboardUpdate(userId);
+    res.json({ success: true, deletedEvent: result.rows[0] });
+  } catch (error) {
+    console.error('Error deleting calendar event:', error);
+    res.status(500).json({ error: 'Failed to delete calendar event' });
+  }
+});
 
 // WebSocket connection handling
 io.on('connection', (socket) => {

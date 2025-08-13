@@ -55,14 +55,13 @@ interface DashboardData {
   maxXp: number;
 }
 
-interface DashboardContextType {
+export interface DashboardContextType {
   data: DashboardData;
   setData: React.Dispatch<React.SetStateAction<DashboardData>>;
   loading: boolean;
   error: string | null;
   isConnected: boolean;
   chatMessages: ChatMessage[];
-  
   // Data modification functions
   refreshData: () => Promise<void>;
   addGoal: (type: 'shortTerm' | 'longTerm', text: string, progress?: number) => Promise<void>;
@@ -72,13 +71,12 @@ interface DashboardContextType {
   updateScheduleEvent?: (id: number, time: string, event: string, type?: string) => Promise<void>;
   deleteScheduleEvent?: (id: number) => Promise<void>;
   addWorkout: (type: string, duration: number, calories: number) => Promise<void>;
-  
   // Chat functions
   sendChatMessage: (message: string) => Promise<void>;
   setChatMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 }
 
-const DashboardContext = createContext<DashboardContextType | undefined>(undefined);
+export const DashboardContext = createContext<DashboardContextType | undefined>(undefined);
 
 export const useDashboard = () => {
   const context = useContext(DashboardContext);

@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { DashboardContextType } from '../context/DashboardContext';
+import { DashboardContext, DashboardContextType } from '../context/DashboardContext';
 
 
 // Extend window type for socket.io
@@ -12,6 +12,8 @@ declare global {
   }
 }
 
+
+const BASE_URL = "https://productivity-dashboard-218x.onrender.com";
 const defaultUserId = 1;
 
 function formatDateTimeLocal(dt: string | Date | undefined): string {
@@ -56,7 +58,7 @@ export default function CalendarSection() {
 
   // Fetch events on mount
   useEffect(() => {
-    fetch(`/api/calendar?userId=${defaultUserId}`)
+    fetch(`${BASE_URL}/api/calendar?userId=${defaultUserId}`)
       .then(res => res.json())
       .then((evts: CalendarEvent[]) => {
         setEvents(evts);
@@ -89,7 +91,9 @@ export default function CalendarSection() {
     setError('');
     try {
       const method = form.editing ? 'PUT' : 'POST';
-      const url = form.editing ? `/api/calendar/${form.id}` : '/api/calendar';
+      const url = form.editing
+        ? `${BASE_URL}/api/calendar/${form.id}`
+        : `${BASE_URL}/api/calendar`;
       const body = {
         title: form.title,
         description: form.description,
@@ -129,7 +133,7 @@ export default function CalendarSection() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/calendar/${id}`, {
+      const res = await fetch(`${BASE_URL}/api/calendar/${id}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: defaultUserId })

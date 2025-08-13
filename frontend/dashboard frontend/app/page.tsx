@@ -5,6 +5,7 @@ import EssentialNews from "./components/EssentialNews"
 import MotivationalQuote from "./components/MotivationalQuote"
 import GoalsSection from "./components/GoalsSection"
 import ScheduleSection from "./components/ScheduleSection"
+import CalendarSection from "./components/CalendarSection"
 import WorkoutTracker from "./components/WorkoutTracker"
 import ChatbotSection from "./components/ChatbotSection"
 import EatingGoals from "./components/EatingGoals"
@@ -28,6 +29,9 @@ export default function Dashboard() {
 
             {/* Schedule Section */}
             <ScheduleSection />
+
+            {/* Calendar Section */}
+            <CalendarSection />
           </div>
 
           {/* Right Column - Secondary Content */}

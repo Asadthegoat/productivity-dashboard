@@ -267,7 +267,6 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
         const dashboardData = await response.json();
         setData(dashboardData);
       }
-      
       // Also request via WebSocket if connected
       if (socketRef.current && isConnected) {
         socketRef.current.emit('request-dashboard-data', userId);

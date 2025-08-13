@@ -425,7 +425,7 @@ app.post('/chat', async (req, res) => {
     // Create a system prompt that gives the AI context about the dashboard, including actual data
     const systemPrompt = `You are A.S.A.D (AI-powered Smart Assistant for Dashboard), a productivity assistant that helps users manage their dashboard.
 
-IMPORTANT: When users ask you to ADD, DELETE, UPDATE, or COMPLETE goals/schedules/workouts, you MUST respond with ONLY the JSON action object, followed by a brief message.  
+CRITICAL: When users ask you to ADD, DELETE, UPDATE, or COMPLETE goals/schedules/workouts, you MUST respond with ONLY the JSON action object on the FIRST line, followed by your message.
 
 Current dashboard state:
 Short-term goals:
@@ -434,33 +434,36 @@ ${dashboardData.goals.shortTerm.map(g => `- ID:${g.id} "${g.text}" (${g.progress
 Long-term goals:
 ${dashboardData.goals.longTerm.map(g => `- ID:${g.id} "${g.text}" (${g.progress}%) ${g.completed ? '[COMPLETED]' : ''}`).join('\n')}
 
-Today's schedule:
-${dashboardData.schedule.map(e => `- ID:${e.id} ${e.time}: ${e.event}`).join('\n')}
+Current schedule:
+${dashboardData.schedule.map(e => `- ID:${e.id} | ${e.time}: ${e.event}`).join('\n') || 'No events scheduled'}
 
 Workout log entries: ${dashboardData.workoutLog.length} workouts
 User level: ${dashboardData.level} (${dashboardData.xp}/${dashboardData.maxXp} XP)
 
-REQUIRED JSON ACTIONS (use EXACTLY this format):
+REQUIRED JSON ACTIONS (use EXACTLY this format on first line):
 
-When user says "add a goal [text]" or similar:
+When user wants to add a goal:
 {"action": "add_goal", "type": "shortTerm", "text": "exact goal text", "progress": 0}
 
-When user says "add a long term goal [text]":
+When user wants to add a long term goal:
 {"action": "add_goal", "type": "longTerm", "text": "exact goal text", "progress": 0}
 
-When user says "delete goal" or mentions a specific goal:
+When user wants to delete a goal (identify the exact ID from the list above):
 {"action": "delete_goal", "id": specific_goal_id_number}
 
-When user says "complete goal" or "mark as done":
+When user wants to complete/update a goal:
 {"action": "update_goal", "id": specific_goal_id_number, "completed": true, "progress": 100}
 
-When user says "add [time] [event]" to schedule:
+When user wants to add to schedule:
 {"action": "add_schedule", "time": "specific time", "event": "event description"}
 
-When user says "delete schedule" or "remove [event]" or "cancel [event]":
+When user wants to delete/remove/cancel a schedule event:
+- First try to match by ID if one is visible in the current schedule list
+- If no exact ID match, look for the most recently added event that matches the description
+- Look for time matches (4am, 4:00, morning) and event matches (meeting, appointment, etc.)
 {"action": "delete_schedule", "id": specific_schedule_id_number}
 
-When user says "log workout" or mentions exercise:
+When user wants to log a workout:
 {"action": "add_workout", "type": "workout type", "duration": minutes, "calories": number}
 
 CRITICAL RULES:
@@ -473,20 +476,30 @@ CRITICAL RULES:
 7. When performing actions, respond with friendly natural language explaining what you did
 8. If user asks "what can you do" or general questions, respond conversationally WITHOUT any JSON
 
+SCHEDULE DELETION STRATEGY:
+- If user just added an event and immediately wants to delete it, it's likely the most recent event
+- Match by time: "4am meeting" = look for events around 4:00 AM
+- Match by event type: "meeting" = look for events containing "meeting"
+- Always use the actual ID from the current schedule list when possible
+
 EXAMPLES:
-User: "Add a goal to learn Python"
-You: {"action": "add_goal", "type": "shortTerm", "text": "learn Python", "progress": 0}
+User: "Delete my 3pm meeting" (when schedule shows "ID:5 | 3:00 PM: meeting")
+Response: {"action": "delete_schedule", "id": 5}
+I'll remove your 3pm meeting from the schedule.
 
-User: "Delete the money goal" 
-You: {"action": "delete_goal", "id": 1}
+User: "Cancel the dentist appointment" (when schedule shows "ID:8 | 2:00 PM: dentist appointment")  
+Response: {"action": "delete_schedule", "id": 8}
+Your dentist appointment has been cancelled and removed from your schedule.
 
-User: "Remove my 3pm meeting"
-You: {"action": "delete_schedule", "id": 2}
+User: "What can you help me with?"
+Response: I can help you manage your goals, schedule, and workouts! You can ask me to add or remove items, complete goals, log workouts, and more. What would you like to do today?
 
-User: "Cancel the dentist appointment"
-You: {"action": "delete_schedule", "id": 3}
+User: "How are you doing?"
+Response: I'm doing great and ready to help you stay productive! How can I assist you with your dashboard today?
 
-For general conversation (not actions), respond normally and motivationally.`;
+IMPORTANT: Only use JSON for action commands (add, delete, complete, etc.). For questions, greetings, or general conversation, respond normally without any JSON.
+
+For general conversation (not actions), respond normally and motivationally without JSON.`;
 
     // GROQ API integration
     const groqPayload = {
@@ -519,19 +532,27 @@ For general conversation (not actions), respond normally and motivationally.`;
     });
     
     // Check if the response contains a JSON action
+    let actionFound = false;
     try {
-      const actionMatch = aiResponse.match(/\{.*\}/s);
+      // Look for JSON at the start of the response (more reliable)
+      const firstLineMatch = aiResponse.match(/^\s*\{.*?\}/);
+      // Fallback to finding JSON anywhere in the response
+      const anywhereMatch = aiResponse.match(/\{[^{}]*"action"[^{}]*\}/);
+      
+      const actionMatch = firstLineMatch || anywhereMatch;
+      
       if (actionMatch) {
         const actionData = JSON.parse(actionMatch[0]);
+        console.log('Parsed action:', actionData); // Debug log
 
         // Add Goal
         if (actionData.action === 'add_goal') {
+          actionFound = true;
           const result = await pool.query(
             'INSERT INTO goals (user_id, text, type, progress) VALUES ($1, $2, $3, $4) RETURNING *',
             [userId, actionData.text, actionData.type, actionData.progress || 0]
           );
           
-          // Broadcast dashboard update
           await broadcastDashboardUpdate(userId);
           
           res.json({ 
@@ -544,37 +565,12 @@ For general conversation (not actions), respond normally and motivationally.`;
 
         // Add Schedule
         if (actionData.action === 'add_schedule') {
+          actionFound = true;
           const result = await pool.query(
             'INSERT INTO schedule_events (user_id, time, event) VALUES ($1, $2, $3) RETURNING *',
             [userId, actionData.time, actionData.event]
           );
           
-        // Delete Schedule
-        if (actionData.action === 'delete_schedule') {
-          const result = await pool.query(
-            'DELETE FROM schedule_events WHERE id = $1 AND user_id = $2 RETURNING *',
-            [actionData.id, userId]
-          );
-          
-          if (result.rows.length === 0) {
-            res.json({ 
-              response: "I couldn't find that schedule event to delete. It might have already been removed.",
-              action: actionData
-            });
-            return;
-          }
-          
-          // Broadcast dashboard update
-          await broadcastDashboardUpdate(userId);
-          
-          res.json({ 
-            response: `I've successfully removed "${result.rows[0].event}" from your schedule at ${result.rows[0].time}.`,
-            action: actionData,
-            data: result.rows[0]
-          });
-          return;
-        }
-          // Broadcast dashboard update
           await broadcastDashboardUpdate(userId);
           
           res.json({ 
@@ -585,8 +581,87 @@ For general conversation (not actions), respond normally and motivationally.`;
           return;
         }
 
+        // Delete Schedule - Enhanced with better error handling and fuzzy matching
+        if (actionData.action === 'delete_schedule') {
+          actionFound = true;
+          console.log('Attempting to delete schedule with ID:', actionData.id);
+          
+          // First try exact ID match
+          let checkResult = await pool.query(
+            'SELECT * FROM schedule_events WHERE id = $1 AND user_id = $2',
+            [actionData.id, userId]
+          );
+          
+          // If exact ID doesn't work, try fuzzy matching
+          if (checkResult.rows.length === 0) {
+            console.log('Exact ID not found, trying fuzzy matching...');
+            
+            // Get recent schedule events to find a match
+            const recentEvents = await pool.query(
+              'SELECT * FROM schedule_events WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10',
+              [userId]
+            );
+            
+            // Look for recently added events that match the pattern (more flexible matching)
+            const possibleMatches = recentEvents.rows.filter(event => {
+              const eventLower = event.event.toLowerCase();
+              const timeLower = event.time.toLowerCase();
+              
+              // Match common time patterns
+              const timePatterns = ['4:00', '4am', '04:', 'morning', 'afternoon', 'evening'];
+              const timeMatch = timePatterns.some(pattern => timeLower.includes(pattern));
+              
+              // Match common event types
+              const eventPatterns = ['meeting', 'appointment', 'call', 'lunch', 'dinner'];
+              const eventMatch = eventPatterns.some(pattern => eventLower.includes(pattern));
+              
+              return timeMatch || eventMatch;
+            });
+            
+            if (possibleMatches.length > 0) {
+              checkResult = { rows: [possibleMatches[0]] };
+              console.log('Found fuzzy match:', possibleMatches[0]);
+            }
+          }
+          
+          if (checkResult.rows.length === 0) {
+            // Show current schedule when event not found
+            const currentSchedule = await pool.query(
+              'SELECT * FROM schedule_events WHERE user_id = $1 ORDER BY created_at DESC',
+              [userId]
+            );
+            
+            const scheduleList = currentSchedule.rows.map(e => `ID:${e.id} | ${e.time}: ${e.event}`).join('\n') || 'No events scheduled';
+            
+            res.json({ 
+              response: `I couldn't find that schedule event. Here's your current schedule:\n\n${scheduleList}\n\nPlease specify which event to remove.`,
+              action: actionData,
+              error: "Event not found",
+              currentSchedule: currentSchedule.rows
+            });
+            return;
+          }
+          
+          // Use the correct ID from the found event
+          const eventToDelete = checkResult.rows[0];
+          const result = await pool.query(
+            'DELETE FROM schedule_events WHERE id = $1 AND user_id = $2 RETURNING *',
+            [eventToDelete.id, userId]
+          );
+          
+          await broadcastDashboardUpdate(userId);
+          
+          res.json({ 
+            response: `Successfully removed "${result.rows[0].event}" at ${result.rows[0].time}.`,
+            action: actionData,
+            data: result.rows[0]
+          });
+          return;
+        }
+
         // Add Workout
         if (actionData.action === 'add_workout') {
+          actionFound = true;
           const workoutResult = await pool.query(
             'INSERT INTO workout_log (user_id, type, duration, calories) VALUES ($1, $2, $3, $4) RETURNING *',
             [userId, actionData.type, actionData.duration, actionData.calories]
@@ -611,7 +686,6 @@ For general conversation (not actions), respond normally and motivationally.`;
             [newXp, newLevel, newMaxXp, userId]
           );
 
-          // Broadcast dashboard update
           await broadcastDashboardUpdate(userId);
 
           res.json({ 
@@ -626,6 +700,7 @@ For general conversation (not actions), respond normally and motivationally.`;
 
         // Delete Goal
         if (actionData.action === 'delete_goal') {
+          actionFound = true;
           const result = await pool.query(
             'DELETE FROM goals WHERE id = $1 AND user_id = $2 RETURNING *',
             [actionData.id, userId]
@@ -639,7 +714,6 @@ For general conversation (not actions), respond normally and motivationally.`;
             return;
           }
           
-          // Broadcast dashboard update
           await broadcastDashboardUpdate(userId);
           
           res.json({ 
@@ -652,6 +726,7 @@ For general conversation (not actions), respond normally and motivationally.`;
 
         // Complete/Update Goal
         if (actionData.action === 'update_goal') {
+          actionFound = true;
           const result = await pool.query(
             'UPDATE goals SET completed = $1, progress = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND user_id = $4 RETURNING *',
             [actionData.completed, actionData.progress, actionData.id, userId]
@@ -665,7 +740,6 @@ For general conversation (not actions), respond normally and motivationally.`;
             return;
           }
           
-          // Broadcast dashboard update
           await broadcastDashboardUpdate(userId);
           
           const status = actionData.completed ? 'completed' : `updated to ${actionData.progress}% progress`;
@@ -679,6 +753,7 @@ For general conversation (not actions), respond normally and motivationally.`;
 
         // Refresh News
         if (actionData.action === 'refresh_news' && Array.isArray(actionData.topics)) {
+          actionFound = true;
           const news = await fetchNews(actionData.topics);
           
           res.json({
@@ -690,10 +765,14 @@ For general conversation (not actions), respond normally and motivationally.`;
         }
       }
     } catch (parseError) {
-      console.log('No action JSON found in response');
+      console.log('JSON parsing error:', parseError.message);
+      console.log('AI Response that failed to parse:', aiResponse);
     }
     
-    res.json({ response: aiResponse });
+    // If no action was found or processed, return the normal AI response
+    if (!actionFound) {
+      res.json({ response: aiResponse });
+    }
   } catch (error) {
     console.error(error.response?.data || error.message);
     res.status(500).json({ error: 'Failed to get response from AI.' });

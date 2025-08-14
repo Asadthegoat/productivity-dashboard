@@ -81,12 +81,17 @@ const getUserData = async (userId = 1) => {
     const scheduleResult = await pool.query('SELECT * FROM schedule_events WHERE user_id = $1', [userId]);
     const workoutResult = await pool.query('SELECT * FROM workout_log WHERE user_id = $1', [userId]);
     const eatingGoalsResult = await pool.query('SELECT * FROM eating_goals WHERE user_id = $1', [userId]);
-    const calendarResult = await pool.query('SELECT * FROM calendar_events WHERE user_id = $1 ORDER BY start_time ASC', [userId]);
+    const calendarResult = await pool.query('SELECT * FROM calendar_events WHERE user_id = $1', [userId]);
     const newsResult = await pool.query('SELECT * FROM news_articles ORDER BY fetched_at DESC LIMIT 10');
 
     const goals = goalsResult.rows;
     const shortTermGoals = goals.filter(g => g.type === 'shortTerm');
     const longTermGoals = goals.filter(g => g.type === 'longTerm');
+
+    // Only include events with valid ISO start_time, and sort by start_time ascending
+    const calendarEvents = (calendarResult.rows || [])
+      .filter(e => e && typeof e.start_time === 'string' && !isNaN(Date.parse(e.start_time)))
+      .sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
 
     return {
       goals: {
@@ -97,7 +102,7 @@ const getUserData = async (userId = 1) => {
       workoutLog: workoutResult.rows,
       eatingGoals: eatingGoalsResult.rows,
       news: newsResult.rows,
-      calendar: (calendarResult.rows || []).filter(e => e && typeof e.start_time === 'string'),
+      calendar: calendarEvents,
       level: user?.level || 1,
       xp: user?.xp || 0,
       maxXp: user?.max_xp || 1000
@@ -106,13 +111,23 @@ const getUserData = async (userId = 1) => {
 // Calendar API endpoints
 app.post('/api/calendar', async (req, res) => {
   try {
-    const { title, description = '', start_time, end_time = null, all_day = false, userId = 1 } = req.body;
+    let { title, description = '', start_time, end_time = null, all_day = false, userId = 1 } = req.body;
     if (!title || !start_time) {
       return res.status(400).json({ error: 'Title and start_time are required.' });
     }
+    // Normalize start_time: always use ISO string, set to 00:00:00 for all-day events
+    let normalizedStart = start_time;
+    if (all_day && typeof start_time === 'string' && start_time.length === 10) {
+      // If only date provided, append T00:00:00
+      normalizedStart = `${start_time}T00:00:00`;
+    } else if (typeof start_time === 'string' && start_time.length === 10) {
+      // If not all_day but only date provided, still append T00:00:00
+      normalizedStart = `${start_time}T00:00:00`;
+    }
+    // If already a full ISO string, leave as is
     const result = await pool.query(
       'INSERT INTO calendar_events (user_id, title, description, start_time, end_time, all_day) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [userId, title, description, start_time, end_time, all_day]
+      [userId, title, description, normalizedStart, end_time, all_day]
     );
     await broadcastDashboardUpdate(userId);
     res.json({ success: true, event: result.rows[0] });

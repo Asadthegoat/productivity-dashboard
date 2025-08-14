@@ -74,34 +74,15 @@ pool.connect((err, client, release) => {
 
 // Helper functions for database operations
 const getUserData = async (userId = 1) => {
-  try {
+    // Query all required data for the dashboard
     const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
-    const user = userResult.rows[0];
-
-    const goalsResult = await pool.query(
-      'SELECT * FROM goals WHERE user_id = $1 ORDER BY created_at DESC',
-      [userId]
-    );
-    const scheduleResult = await pool.query(
-      'SELECT * FROM schedule_events WHERE user_id = $1 ORDER BY event_date, time',
-      [userId]
-    );
-    const workoutResult = await pool.query(
-      'SELECT * FROM workout_log WHERE user_id = $1 ORDER BY date DESC',
-      [userId]
-    );
-    const eatingGoalsResult = await pool.query(
-      'SELECT * FROM eating_goals WHERE user_id = $1',
-      [userId]
-    );
-    const newsResult = await pool.query(
-      'SELECT * FROM news_articles ORDER BY fetched_at DESC LIMIT 10'
-    );
-    // Fetch calendar events
-    const calendarResult = await pool.query(
-      'SELECT * FROM calendar_events WHERE user_id = $1 ORDER BY start_time ASC',
-      [userId]
-    );
+    const user = userResult.rows[0] || {};
+    const goalsResult = await pool.query('SELECT * FROM goals WHERE user_id = $1', [userId]);
+    const scheduleResult = await pool.query('SELECT * FROM schedule_events WHERE user_id = $1', [userId]);
+    const workoutResult = await pool.query('SELECT * FROM workout_log WHERE user_id = $1', [userId]);
+    const eatingGoalsResult = await pool.query('SELECT * FROM eating_goals WHERE user_id = $1', [userId]);
+    const calendarResult = await pool.query('SELECT * FROM calendar_events WHERE user_id = $1 ORDER BY start_time ASC', [userId]);
+    const newsResult = await pool.query('SELECT * FROM news_articles ORDER BY fetched_at DESC LIMIT 10');
 
     const goals = goalsResult.rows;
     const shortTermGoals = goals.filter(g => g.type === 'shortTerm');
@@ -116,46 +97,12 @@ const getUserData = async (userId = 1) => {
       workoutLog: workoutResult.rows,
       eatingGoals: eatingGoalsResult.rows,
       news: newsResult.rows,
-      calendar: calendarResult.rows,
+      calendar: (calendarResult.rows || []).filter(e => e && typeof e.start_time === 'string'),
       level: user?.level || 1,
       xp: user?.xp || 0,
       maxXp: user?.max_xp || 1000
     };
-  } catch (error) {
-    console.error('Error fetching user data:', error);
-    throw error;
-  }
-};
-// Calendar API endpoints
-app.post('/api/calendar', async (req, res) => {
-  try {
-    const { title, description, start_time, end_time, all_day = false, userId = 1 } = req.body;
-    const result = await pool.query(
-      `INSERT INTO calendar_events (user_id, title, description, start_time, end_time, all_day)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [userId, title, description, start_time, end_time, all_day]
-    );
-    await broadcastDashboardUpdate(userId);
-    res.json({ success: true, event: result.rows[0] });
-  } catch (error) {
-    console.error('Error creating calendar event:', error);
-    res.status(500).json({ error: 'Failed to save calendar event' });
-  }
-});
-
-app.get('/api/calendar', async (req, res) => {
-  try {
-    const { userId = 1 } = req.query;
-    const result = await pool.query(
-      'SELECT * FROM calendar_events WHERE user_id = $1 ORDER BY start_time ASC',
-      [userId]
-    );
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Error fetching calendar events:', error);
-    res.status(500).json([]);
-  }
-});
+}
 
 app.put('/api/calendar/:id', async (req, res) => {
   try {
@@ -503,7 +450,7 @@ Current schedule:
 ${dashboardData.schedule.map(e => `- ID:${e.id} | ${e.time}: ${e.event}`).join('\n') || 'No events scheduled'}
 
 Calendar events:
-${dashboardData.calendar.map(e => `- ID:${e.id} | ${e.start_time.slice(0,10)}: ${e.title}`).join('\n') || 'No calendar events'}
+${(dashboardData.calendar || []).filter(e => e && typeof e.start_time === 'string').map(e => `- ID:${e.id} | ${e.start_time.slice(0,10)}: ${e.title}`).join('\n') || 'No calendar events'}
 
 Workout log entries: ${dashboardData.workoutLog.length} workouts
 User level: ${dashboardData.level} (${dashboardData.xp}/${dashboardData.maxXp} XP)

@@ -103,6 +103,24 @@ const getUserData = async (userId = 1) => {
       maxXp: user?.max_xp || 1000
     };
 }
+// Calendar API endpoints
+app.post('/api/calendar', async (req, res) => {
+  try {
+    const { title, description = '', start_time, end_time = null, all_day = false, userId = 1 } = req.body;
+    if (!title || !start_time) {
+      return res.status(400).json({ error: 'Title and start_time are required.' });
+    }
+    const result = await pool.query(
+      'INSERT INTO calendar_events (user_id, title, description, start_time, end_time, all_day) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [userId, title, description, start_time, end_time, all_day]
+    );
+    await broadcastDashboardUpdate(userId);
+    res.json({ success: true, event: result.rows[0] });
+  } catch (error) {
+    console.error('Error creating calendar event:', error);
+    res.status(500).json({ error: 'Failed to create calendar event' });
+  }
+});
 
 app.put('/api/calendar/:id', async (req, res) => {
   try {

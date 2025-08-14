@@ -490,7 +490,7 @@ app.post('/chat', async (req, res) => {
     // Create a system prompt that gives the AI context about the dashboard, including actual data
     const systemPrompt = `You are A.S.A.D (AI-powered Smart Assistant for Dashboard), a productivity assistant that helps users manage their dashboard.
 
-CRITICAL: When users ask you to ADD, DELETE, UPDATE, or COMPLETE goals/schedules/workouts, you MUST respond with ONLY the JSON action object on the FIRST line, followed by your message.
+CRITICAL: When users ask you to ADD, DELETE, UPDATE, or COMPLETE goals/schedules/workouts/calendar events, you MUST respond with ONLY the JSON action object on the FIRST line, followed by your message.
 
 Current dashboard state:
 Short-term goals:
@@ -502,10 +502,22 @@ ${dashboardData.goals.longTerm.map(g => `- ID:${g.id} "${g.text}" (${g.progress}
 Current schedule:
 ${dashboardData.schedule.map(e => `- ID:${e.id} | ${e.time}: ${e.event}`).join('\n') || 'No events scheduled'}
 
+Calendar events:
+${dashboardData.calendar.map(e => `- ID:${e.id} | ${e.start_time.slice(0,10)}: ${e.title}`).join('\n') || 'No calendar events'}
+
 Workout log entries: ${dashboardData.workoutLog.length} workouts
 User level: ${dashboardData.level} (${dashboardData.xp}/${dashboardData.maxXp} XP)
 
 REQUIRED JSON ACTIONS (use EXACTLY this format on first line):
+
+When user wants to add a calendar event:
+{"action": "add_calendar_event", "title": "event title", "date": "YYYY-MM-DD", "description": "optional description", "all_day": true/false}
+
+When user wants to delete a calendar event (identify the exact ID from the list above, or match by date/title):
+{"action": "delete_calendar_event", "id": specific_event_id_number}
+
+When user wants to know what events are on a specific date:
+{"action": "list_calendar_events", "date": "YYYY-MM-DD"}
 
 When user wants to add a goal:
 {"action": "add_goal", "type": "shortTerm", "text": "exact goal text", "progress": 0}
@@ -533,34 +545,26 @@ When user wants to log a workout:
 
 CRITICAL RULES:
 1. Always identify the correct ID from the lists above
-2. For schedule deletions, look for keywords like: delete, remove, cancel, clear
-3. Match events by time, event name, or both
+2. For deletions, look for keywords like: delete, remove, cancel, clear
+3. Match events by date, title, or both
 4. If multiple events match, ask for clarification
 5. Put JSON on the very first line of your response
 6. NEVER show JSON to the user in your visible response - JSON is for system processing only
 7. When performing actions, respond with friendly natural language explaining what you did
 8. If user asks "what can you do" or general questions, respond conversationally WITHOUT any JSON
 
-SCHEDULE DELETION STRATEGY:
-- If user just added an event and immediately wants to delete it, it's likely the most recent event
-- Match by time: "4am meeting" = look for events around 4:00 AM
-- Match by event type: "meeting" = look for events containing "meeting"
-- Always use the actual ID from the current schedule list when possible
-
 EXAMPLES:
-User: "Delete my 3pm meeting" (when schedule shows "ID:5 | 3:00 PM: meeting")
-Response: {"action": "delete_schedule", "id": 5}
-I'll remove your 3pm meeting from the schedule.
+User: "Add a calendar event for August 20th called Doctor Appointment"
+Response: {"action": "add_calendar_event", "title": "Doctor Appointment", "date": "2025-08-20", "description": "", "all_day": true}
+I've added "Doctor Appointment" to your calendar for August 20th.
 
-User: "Cancel the dentist appointment" (when schedule shows "ID:8 | 2:00 PM: dentist appointment")  
-Response: {"action": "delete_schedule", "id": 8}
-Your dentist appointment has been cancelled and removed from your schedule.
+User: "Delete my Doctor Appointment on August 20th"
+Response: {"action": "delete_calendar_event", "id": 12}
+Your Doctor Appointment on August 20th has been removed from your calendar.
 
-User: "What can you help me with?"
-Response: I can help you manage your goals, schedule, and workouts! You can ask me to add or remove items, complete goals, log workouts, and more. What would you like to do today?
-
-User: "How are you doing?"
-Response: I'm doing great and ready to help you stay productive! How can I assist you with your dashboard today?
+User: "What events do I have on August 20th?"
+Response: {"action": "list_calendar_events", "date": "2025-08-20"}
+Here are your events for August 20th: ...
 
 IMPORTANT: Only use JSON for action commands (add, delete, complete, etc.). For questions, greetings, or general conversation, respond normally without any JSON.
 
@@ -609,6 +613,66 @@ For general conversation (not actions), respond normally and motivationally with
       if (actionMatch) {
         const actionData = JSON.parse(actionMatch[0]);
         console.log('Parsed action:', actionData); // Debug log
+
+        // Add Calendar Event
+        if (actionData.action === 'add_calendar_event') {
+          actionFound = true;
+          // Compose start_time as YYYY-MM-DDT00:00:00
+          const start_time = actionData.date ? `${actionData.date}T00:00:00` : null;
+          const result = await pool.query(
+            'INSERT INTO calendar_events (user_id, title, description, start_time, all_day) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+            [userId, actionData.title, actionData.description || '', start_time, actionData.all_day ?? true]
+          );
+          await broadcastDashboardUpdate(userId);
+          res.json({
+            response: `I've added "${actionData.title}" to your calendar for ${actionData.date}.`,
+            action: actionData,
+            data: result.rows[0]
+          });
+          return;
+        }
+
+        // Delete Calendar Event
+        if (actionData.action === 'delete_calendar_event') {
+          actionFound = true;
+          // Try to delete by ID
+          const result = await pool.query(
+            'DELETE FROM calendar_events WHERE id = $1 AND user_id = $2 RETURNING *',
+            [actionData.id, userId]
+          );
+          if (result.rows.length === 0) {
+            res.json({ response: `Could not find a calendar event with that ID.`, action: actionData });
+            return;
+          }
+          await broadcastDashboardUpdate(userId);
+          res.json({
+            response: `Your event "${result.rows[0].title}" on ${result.rows[0].start_time.slice(0,10)} has been removed from your calendar.`,
+            action: actionData,
+            data: result.rows[0]
+          });
+          return;
+        }
+
+        // List Calendar Events for a Date
+        if (actionData.action === 'list_calendar_events') {
+          actionFound = true;
+          const date = actionData.date;
+          const result = await pool.query(
+            'SELECT * FROM calendar_events WHERE user_id = $1 AND start_time >= $2 AND start_time < $3 ORDER BY start_time ASC',
+            [userId, `${date}T00:00:00`, `${date}T23:59:59`]
+          );
+          if (result.rows.length === 0) {
+            res.json({ response: `You have no events on ${date}.`, action: actionData, events: [] });
+            return;
+          }
+          const eventList = result.rows.map(e => `- ${e.title}${e.description ? ': ' + e.description : ''}`).join('\n');
+          res.json({
+            response: `Here are your events for ${date}:\n${eventList}`,
+            action: actionData,
+            events: result.rows
+          });
+          return;
+        }
 
         // Add Goal
         if (actionData.action === 'add_goal') {

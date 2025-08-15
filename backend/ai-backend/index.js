@@ -75,6 +75,7 @@ pool.connect((err, client, release) => {
 // Helper functions for database operations
 const getUserData = async (userId = 1) => {
     // Query all required data for the dashboard
+    console.log('getUserData called with userId:', userId);
     const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
     const user = userResult.rows[0] || {};
     const goalsResult = await pool.query('SELECT * FROM goals WHERE user_id = $1', [userId]);
@@ -82,6 +83,7 @@ const getUserData = async (userId = 1) => {
     const workoutResult = await pool.query('SELECT * FROM workout_log WHERE user_id = $1', [userId]);
     const eatingGoalsResult = await pool.query('SELECT * FROM eating_goals WHERE user_id = $1', [userId]);
     const calendarResult = await pool.query('SELECT * FROM calendar_events WHERE user_id = $1', [userId]);
+    console.log('Raw calendarResult.rows:', calendarResult.rows);
     const newsResult = await pool.query('SELECT * FROM news_articles ORDER BY fetched_at DESC LIMIT 10');
 
     const goals = goalsResult.rows;

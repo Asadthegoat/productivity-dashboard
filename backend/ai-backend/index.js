@@ -84,6 +84,12 @@ const getUserData = async (userId = 1) => {
     const eatingGoalsResult = await pool.query('SELECT * FROM eating_goals WHERE user_id = $1', [userId]);
     const calendarResult = await pool.query('SELECT * FROM calendar_events WHERE user_id = $1', [userId]);
     console.log('Raw calendarResult.rows:', calendarResult.rows);
+    // Debug: print type and value of start_time for each event
+    if (calendarResult.rows && calendarResult.rows.length > 0) {
+      calendarResult.rows.forEach((e, i) => {
+        console.log(`calendarEvent[${i}]: id=${e.id}, start_time=`, e.start_time, 'type:', typeof e.start_time);
+      });
+    }
     const newsResult = await pool.query('SELECT * FROM news_articles ORDER BY fetched_at DESC LIMIT 10');
 
     const goals = goalsResult.rows;

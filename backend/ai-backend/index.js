@@ -96,8 +96,13 @@ const getUserData = async (userId = 1) => {
     const shortTermGoals = goals.filter(g => g.type === 'shortTerm');
     const longTermGoals = goals.filter(g => g.type === 'longTerm');
 
-    // Only include events with valid ISO start_time, and sort by start_time ascending
+    // Convert start_time and end_time to ISO strings, then filter and sort
     const calendarEvents = (calendarResult.rows || [])
+      .map(e => ({
+        ...e,
+        start_time: e.start_time instanceof Date ? e.start_time.toISOString() : e.start_time,
+        end_time: e.end_time instanceof Date && e.end_time !== null ? e.end_time.toISOString() : e.end_time
+      }))
       .filter(e => e && typeof e.start_time === 'string' && !isNaN(Date.parse(e.start_time)))
       .sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
 

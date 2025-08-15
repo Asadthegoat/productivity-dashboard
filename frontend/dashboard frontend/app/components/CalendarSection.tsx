@@ -56,11 +56,11 @@ export default function CalendarSection() {
 
   // Fetch events on mount and when month changes
   useEffect(() => {
-    fetch(`${BASE_URL}/api/calendar?userId=${defaultUserId}`)
+    fetch(`${BASE_URL}/api/dashboard-data?userId=${defaultUserId}`)
       .then(res => res.json())
-      .then((evts: CalendarEvent[]) => {
-        setEvents(evts);
-        setData && setData((prev: any) => ({ ...prev, calendar: evts }));
+      .then((dashboard: any) => {
+        setEvents(dashboard.calendar || []);
+        setData && setData((prev: any) => ({ ...prev, calendar: dashboard.calendar || [] }));
       });
   }, [setData, currentMonth]);
 
@@ -105,11 +105,17 @@ export default function CalendarSection() {
   const eventsByDate: Record<string, CalendarEvent[]> = {};
   (events || []).forEach(evt => {
     if (evt && typeof evt === 'object' && typeof evt.start_time === 'string') {
+      // Always use the date part as in backend (YYYY-MM-DD)
       const key = evt.start_time.slice(0, 10);
       if (!eventsByDate[key]) eventsByDate[key] = [];
       eventsByDate[key].push(evt);
     }
   });
+
+  // Helper to get local date string in YYYY-MM-DD
+  const getLocalDateString = (date: Date) => {
+    return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+  };
 
   // Modal handlers
   const openModal = (date: Date) => {
@@ -187,9 +193,10 @@ export default function CalendarSection() {
       </div>
       <div className="grid grid-cols-7 gap-2">
         {monthDays.map((date, idx) => {
-          const key = date.toISOString().slice(0, 10);
+          const key = getLocalDateString(date);
           const isCurrentMonth = date.getMonth() === currentMonth.getMonth();
-          const isToday = key === new Date().toISOString().slice(0, 10);
+          const todayKey = getLocalDateString(new Date());
+          const isToday = key === todayKey;
           const dayEvents = eventsByDate[key] || [];
           return (
             <div

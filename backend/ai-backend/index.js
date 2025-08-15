@@ -268,7 +268,8 @@ cron.schedule("0 6 * * *", async () => {
 // Routes
 app.get('/api/dashboard-data', async (req, res) => {
   try {
-    const data = await getUserData();
+    const userId = req.query.userId ? Number(req.query.userId) : 1;
+    const data = await getUserData(userId);
     res.json(data);
   } catch (error) {
     console.error('Error getting dashboard data:', error);

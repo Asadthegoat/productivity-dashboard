@@ -16,7 +16,7 @@ class SpotifyService {
   }
 
   // Generate authorization URL for Spotify OAuth
-  getAuthUrl(userId) {
+  getAuthUrl(userId, forceReauth = false) {
     const scopes = [
       'user-read-private',
       'user-read-email',
@@ -31,7 +31,14 @@ class SpotifyService {
     
     const state = `user_${userId}`; // Include user ID in state for security
     
-    return spotifyApi.createAuthorizeURL(scopes, state);
+    const authUrl = spotifyApi.createAuthorizeURL(scopes, state);
+    
+    // Add parameters to force account selection and logout existing session
+    if (forceReauth) {
+      return `${authUrl}&show_dialog=true`;
+    }
+    
+    return authUrl;
   }
 
   // Handle OAuth callback and get access tokens
@@ -265,6 +272,29 @@ class SpotifyService {
       console.error('Error checking user premium status:', error);
       return false;
     }
+  }
+
+  // Disconnect user from Spotify (remove stored tokens)
+  disconnectUser(userId) {
+    try {
+      // Remove tokens from memory
+      const hadTokens = this.userTokens.has(userId);
+      this.userTokens.delete(userId);
+      
+      // In production, you would also delete from database:
+      // await pool.query('DELETE FROM spotify_tokens WHERE user_id = $1', [userId]);
+      
+      console.log(`User ${userId} disconnected from Spotify`);
+      return { success: true, hadTokens };
+    } catch (error) {
+      console.error('Error disconnecting user:', error);
+      throw error;
+    }
+  }
+
+  // Get user authentication status
+  isUserAuthenticated(userId) {
+    return this.userTokens.has(userId);
   }
 }
 

@@ -16,7 +16,11 @@ const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: [
+      process.env.FRONTEND_URL || "http://localhost:3000",
+      /^https:\/\/.*\.vercel\.app$/,  // Allow any Vercel domain
+      /^https:\/\/v0-.*\.vercel\.app$/  // Allow v0 dev chat domains
+    ],
     methods: ["GET", "POST"]
   }
 });
@@ -26,7 +30,14 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const NEWS_API_KEY = process.env.NEWS_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    process.env.FRONTEND_URL || "http://localhost:3000",
+    /^https:\/\/.*\.vercel\.app$/,  // Allow any Vercel domain
+    /^https:\/\/v0-.*\.vercel\.app$/  // Allow v0 dev chat domains
+  ],
+  credentials: true
+}));
 app.use(express.json());
 
 // Debug logging to see what's actually being used
@@ -909,7 +920,8 @@ For general conversation (not actions), respond normally and motivationally with
 app.get('/api/spotify/auth/:userId', (req, res) => {
   try {
     const { userId } = req.params;
-    const authUrl = spotifyService.getAuthUrl(userId);
+    const { force_reauth } = req.query;
+    const authUrl = spotifyService.getAuthUrl(userId, force_reauth === 'true');
     res.json({ authUrl });
   } catch (error) {
     console.error('Error generating Spotify auth URL:', error);
@@ -929,14 +941,17 @@ app.get('/api/spotify/callback', async (req, res) => {
     const result = await spotifyService.handleCallback(code, state);
     
     if (result.success) {
-      // Redirect back to dashboard with success message
-      res.redirect(`${process.env.FRONTEND_URL || "http://localhost:3000"}?spotify_auth=success`);
+      // Support multiple frontend origins for development flexibility
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+      res.redirect(`${frontendUrl}?spotify_auth=success`);
     } else {
-      res.redirect(`${process.env.FRONTEND_URL || "http://localhost:3000"}?spotify_auth=error`);
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+      res.redirect(`${frontendUrl}?spotify_auth=error`);
     }
   } catch (error) {
     console.error('Error in Spotify callback:', error);
-    res.redirect(`${process.env.FRONTEND_URL || "http://localhost:3000"}?spotify_auth=error`);
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    res.redirect(`${frontendUrl}?spotify_auth=error`);
   }
 });
 
@@ -1089,6 +1104,24 @@ app.post('/api/spotify/refresh-song/:userId', async (req, res) => {
   } catch (error) {
     console.error('Error refreshing song of the day:', error);
     res.status(500).json({ error: 'Failed to refresh song of the day' });
+  }
+});
+
+// Disconnect/logout from Spotify
+app.post('/api/spotify/disconnect/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Remove user tokens from memory/database
+    const result = spotifyService.disconnectUser(userId);
+    
+    res.json({
+      success: true,
+      message: 'Successfully disconnected from Spotify'
+    });
+  } catch (error) {
+    console.error('Error disconnecting from Spotify:', error);
+    res.status(500).json({ error: 'Failed to disconnect from Spotify' });
   }
 });
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { Music, Play, Pause, RotateCw, ExternalLink, Heart, User } from "lucide-react"
+import { Music, Play, Pause, RotateCw, ExternalLink, Heart, User, LogOut } from "lucide-react"
 import { useEffect, useState } from "react"
 
 const BASE_URL = "https://productivity-dashboard-218x.onrender.com";
@@ -36,6 +36,23 @@ export default function SongOfTheDay() {
   useEffect(() => {
     checkAuthStatus();
     fetchSongOfTheDay();
+    
+    // Check URL parameters for Spotify auth result
+    const urlParams = new URLSearchParams(window.location.search);
+    const spotifyAuth = urlParams.get('spotify_auth');
+    
+    if (spotifyAuth === 'success') {
+      // Clear URL parameter and refresh auth status
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setTimeout(() => {
+        checkAuthStatus();
+        fetchSongOfTheDay();
+      }, 1000);
+    } else if (spotifyAuth === 'error') {
+      console.error('Spotify authentication failed');
+      // Clear URL parameter
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }, []);
 
   // Listen for WebSocket updates (song updates)
@@ -105,12 +122,27 @@ export default function SongOfTheDay() {
     }
   };
 
-  const handleSpotifyAuth = async () => {
+  const handleSpotifyAuth = async (forceReauth = false) => {
     try {
-      const response = await fetch(`${BASE_URL}/api/spotify/auth/${defaultUserId}`);
+      const url = `${BASE_URL}/api/spotify/auth/${defaultUserId}${forceReauth ? '?force_reauth=true' : ''}`;
+      const response = await fetch(url);
       const data = await response.json();
       
       if (data.authUrl) {
+        // If forcing reauth, first clear any existing Spotify session
+        if (forceReauth) {
+          // Open Spotify logout in a hidden iframe to clear session
+          const logoutFrame = document.createElement('iframe');
+          logoutFrame.style.display = 'none';
+          logoutFrame.src = 'https://accounts.spotify.com/logout';
+          document.body.appendChild(logoutFrame);
+          
+          // Remove iframe after a moment
+          setTimeout(() => {
+            document.body.removeChild(logoutFrame);
+          }, 1000);
+        }
+
         // Open Spotify auth in a popup window
         const popup = window.open(
           data.authUrl,
@@ -181,6 +213,35 @@ export default function SongOfTheDay() {
     }
   };
 
+  const disconnectSpotify = async () => {
+    try {
+      const response = await fetch(`${BASE_URL}/api/spotify/disconnect/${defaultUserId}`, {
+        method: 'POST'
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        // Reset all state
+        setSong(null);
+        setIsAuthenticated(false);
+        setNeedsAuth(true);
+        if (audio) {
+          audio.pause();
+          setIsPlaying(false);
+          setAudioProgress(0);
+          setAudio(null);
+        }
+        
+        // Immediately start reauth flow with account selection
+        setTimeout(() => {
+          handleSpotifyAuth(true); // Force reauth with account selection
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Error disconnecting from Spotify:', error);
+    }
+  };
+
   const formatDuration = (ms: number) => {
     const minutes = Math.floor(ms / 60000);
     const seconds = Math.floor((ms % 60000) / 1000);
@@ -203,13 +264,20 @@ export default function SongOfTheDay() {
           <p className="text-gray-400 text-sm mb-4">
             Connect your Spotify account to get personalized song recommendations based on your listening history.
           </p>
-          <button
-            onClick={handleSpotifyAuth}
-            className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-medium transition-colors inline-flex items-center gap-2"
-          >
-            <Music className="w-4 h-4" />
-            Connect Spotify
-          </button>
+          <div className="flex flex-col gap-2 items-center">
+            <button
+              onClick={handleSpotifyAuth}
+              className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-medium transition-colors inline-flex items-center gap-2"
+            >
+              <Music className="w-4 h-4" />
+              Connect Spotify
+            </button>
+            {!needsAuth && (
+              <p className="text-xs text-gray-500 mt-2">
+                Want to use a different account? Click connect to switch accounts.
+              </p>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -232,20 +300,56 @@ export default function SongOfTheDay() {
   if (!song) {
     return (
       <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700">
-        <div className="flex items-center gap-3 mb-4">
-          <Music className="w-5 h-5 text-purple-400" />
-          <h2 className="text-lg font-semibold text-white">Song of the Day</h2>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <Music className="w-5 h-5 text-purple-400" />
+            <h2 className="text-lg font-semibold text-white">Song of the Day</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fetchSongOfTheDay}
+              className="p-2 bg-gray-700 text-white hover:bg-gray-600 rounded-lg transition-colors border border-gray-600"
+              title="Refresh"
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+            <button
+              onClick={disconnectSpotify}
+              className="p-2 bg-red-600 text-white hover:bg-red-700 rounded-lg transition-colors border border-red-500"
+              title="Disconnect and reconnect Spotify"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
         </div>
         <div className="text-center py-8">
+          <div className="w-16 h-16 bg-gradient-to-br from-yellow-500 to-orange-500 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Music className="w-8 h-8 text-white" />
+          </div>
+          <h3 className="text-white font-medium mb-2">No Songs Available</h3>
           <p className="text-gray-400 text-sm mb-4">
-            No song available. Make sure you've listened to music on Spotify recently.
+            {isAuthenticated 
+              ? "Make sure you've listened to music on Spotify recently. Try listening to a few songs on Spotify, then come back and refresh."
+              : "You may need to reconnect your Spotify account or listen to more music on Spotify first."
+            }
           </p>
-          <button
-            onClick={fetchSongOfTheDay}
-            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
-          >
-            Try Again
-          </button>
+          <div className="flex flex-col gap-2 items-center">
+            <button
+              onClick={fetchSongOfTheDay}
+              className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+            >
+              Try Again
+            </button>
+            <button
+              onClick={() => handleSpotifyAuth(true)}
+              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+            >
+              Reconnect Spotify
+            </button>
+            <p className="text-xs text-gray-500 mt-2 max-w-sm">
+              If this persists, try: 1) Listen to music on Spotify first, 2) Disconnect and reconnect your account, 3) Make sure you have some listening history
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -255,16 +359,27 @@ export default function SongOfTheDay() {
 
   return (
     <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700">
-      <div className="flex items-center gap-3 mb-4">
-        <Music className="w-5 h-5 text-purple-400" />
-        <h2 className="text-lg font-semibold text-white">Song of the Day</h2>
-        <button
-          onClick={refreshSong}
-          className="ml-auto text-gray-400 hover:text-white transition-colors"
-          title="Get new song"
-        >
-          <RotateCw className="w-4 h-4" />
-        </button>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <Music className="w-5 h-5 text-purple-400" />
+          <h2 className="text-lg font-semibold text-white">Song of the Day</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={refreshSong}
+            className="p-2 bg-gray-700 text-white hover:bg-gray-600 rounded-lg transition-colors border border-gray-600"
+            title="Get new song"
+          >
+            <RotateCw className="w-4 h-4" />
+          </button>
+          <button
+            onClick={disconnectSpotify}
+            className="p-2 bg-red-600 text-white hover:bg-red-700 rounded-lg transition-colors border border-red-500"
+            title="Disconnect Spotify account"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       <div className="flex items-center gap-4">

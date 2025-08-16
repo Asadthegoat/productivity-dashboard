@@ -7,6 +7,7 @@ import pkg from 'pg';
 import cron from "node-cron";
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import spotifyService from './spotifyService.js';
 
 const { Pool } = pkg;
 dotenv.config();
@@ -899,6 +900,195 @@ For general conversation (not actions), respond normally and motivationally with
   } catch (error) {
     console.error(error.response?.data || error.message);
     res.status(500).json({ error: 'Failed to get response from AI.' });
+  }
+});
+
+// ===== SPOTIFY INTEGRATION ROUTES =====
+
+// Start Spotify authentication
+app.get('/api/spotify/auth/:userId', (req, res) => {
+  try {
+    const { userId } = req.params;
+    const authUrl = spotifyService.getAuthUrl(userId);
+    res.json({ authUrl });
+  } catch (error) {
+    console.error('Error generating Spotify auth URL:', error);
+    res.status(500).json({ error: 'Failed to generate auth URL' });
+  }
+});
+
+// Handle Spotify OAuth callback
+app.get('/api/spotify/callback', async (req, res) => {
+  const { code, state } = req.query;
+  
+  if (!code || !state) {
+    return res.status(400).json({ error: 'Missing code or state parameter' });
+  }
+
+  try {
+    const result = await spotifyService.handleCallback(code, state);
+    
+    if (result.success) {
+      // Redirect back to dashboard with success message
+      res.redirect(`${process.env.FRONTEND_URL || "http://localhost:3000"}?spotify_auth=success`);
+    } else {
+      res.redirect(`${process.env.FRONTEND_URL || "http://localhost:3000"}?spotify_auth=error`);
+    }
+  } catch (error) {
+    console.error('Error in Spotify callback:', error);
+    res.redirect(`${process.env.FRONTEND_URL || "http://localhost:3000"}?spotify_auth=error`);
+  }
+});
+
+// Get Song of the Day
+app.get('/api/spotify/song-of-the-day/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const songOfTheDay = await spotifyService.getSongOfTheDay(userId);
+    
+    if (songOfTheDay) {
+      // Get additional track info including preview
+      const trackInfo = await spotifyService.getTrackPlaybackInfo(userId, songOfTheDay.id);
+      
+      res.json({
+        success: true,
+        song: {
+          ...songOfTheDay,
+          ...trackInfo
+        }
+      });
+    } else {
+      res.json({ 
+        success: false, 
+        error: 'No song could be selected',
+        message: 'Make sure you have listened to music recently on Spotify'
+      });
+    }
+  } catch (error) {
+    console.error('Error getting song of the day:', error);
+    
+    if (error.message.includes('not authenticated')) {
+      res.status(401).json({ 
+        error: 'User not authenticated with Spotify',
+        needsAuth: true
+      });
+    } else {
+      res.status(500).json({ error: 'Failed to get song of the day' });
+    }
+  }
+});
+
+// Get user's Spotify statistics
+app.get('/api/spotify/stats/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { timeRange = 'medium_term' } = req.query;
+    
+    const [topTracks, topArtists, recentlyPlayed] = await Promise.all([
+      spotifyService.getTopTracks(userId, timeRange, 10),
+      spotifyService.getTopArtists(userId, timeRange, 10),
+      spotifyService.getRecentlyPlayed(userId, 10)
+    ]);
+
+    res.json({
+      success: true,
+      stats: {
+        topTracks: topTracks.map(track => ({
+          id: track.id,
+          name: track.name,
+          artists: track.artists.map(artist => artist.name),
+          album: track.album.name,
+          preview_url: track.preview_url,
+          external_urls: track.external_urls,
+          images: track.album.images
+        })),
+        topArtists: topArtists.map(artist => ({
+          id: artist.id,
+          name: artist.name,
+          genres: artist.genres,
+          popularity: artist.popularity,
+          images: artist.images,
+          external_urls: artist.external_urls
+        })),
+        recentlyPlayed: recentlyPlayed.map(item => ({
+          track: {
+            id: item.track.id,
+            name: item.track.name,
+            artists: item.track.artists.map(artist => artist.name),
+            album: item.track.album.name,
+            preview_url: item.track.preview_url,
+            external_urls: item.track.external_urls,
+            images: item.track.album.images
+          },
+          played_at: item.played_at
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Error getting Spotify stats:', error);
+    
+    if (error.message.includes('not authenticated')) {
+      res.status(401).json({ 
+        error: 'User not authenticated with Spotify',
+        needsAuth: true
+      });
+    } else {
+      res.status(500).json({ error: 'Failed to get Spotify statistics' });
+    }
+  }
+});
+
+// Check user's authentication status
+app.get('/api/spotify/auth-status/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const hasPremium = await spotifyService.checkUserPremium(userId);
+    
+    res.json({
+      authenticated: true,
+      premium: hasPremium
+    });
+  } catch (error) {
+    res.json({
+      authenticated: false,
+      premium: false
+    });
+  }
+});
+
+// Manually refresh song of the day
+app.post('/api/spotify/refresh-song/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const songOfTheDay = await spotifyService.getSongOfTheDay(userId);
+    
+    if (songOfTheDay) {
+      const trackInfo = await spotifyService.getTrackPlaybackInfo(userId, songOfTheDay.id);
+      
+      // Broadcast update to all connected clients
+      broadcastUpdate('song-update', {
+        song: {
+          ...songOfTheDay,
+          ...trackInfo
+        }
+      });
+      
+      res.json({
+        success: true,
+        song: {
+          ...songOfTheDay,
+          ...trackInfo
+        }
+      });
+    } else {
+      res.json({ 
+        success: false, 
+        error: 'No song could be selected' 
+      });
+    }
+  } catch (error) {
+    console.error('Error refreshing song of the day:', error);
+    res.status(500).json({ error: 'Failed to refresh song of the day' });
   }
 });
 

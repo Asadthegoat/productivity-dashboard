@@ -70,15 +70,23 @@ class SpotifyService {
 
   // Refresh access token when it expires
   async refreshAccessToken(userId) {
+    console.log(`Refreshing access token for user ${userId}`);
     const userToken = this.userTokens.get(userId);
     if (!userToken || !userToken.refreshToken) {
+      console.error(`No refresh token available for user ${userId}`);
       throw new Error('No refresh token available for user');
     }
 
     try {
       spotifyApi.setRefreshToken(userToken.refreshToken);
+      console.log('Calling Spotify refresh token API...');
       const data = await spotifyApi.refreshAccessToken();
       const { access_token, expires_in } = data.body;
+
+      console.log(`Token refresh successful for user ${userId}:`, {
+        newTokenLength: access_token ? access_token.length : 0,
+        expiresIn: expires_in
+      });
 
       // Update stored tokens
       this.userTokens.set(userId, {
@@ -90,22 +98,37 @@ class SpotifyService {
       spotifyApi.setAccessToken(access_token);
       return access_token;
     } catch (error) {
-      console.error('Error refreshing access token:', error);
+      console.error('Error refreshing access token:', {
+        message: error.message,
+        statusCode: error.statusCode,
+        body: error.body
+      });
       throw error;
     }
   }
 
   // Ensure valid access token for user
   async ensureValidToken(userId) {
+    console.log(`Ensuring valid token for user ${userId}`);
     const userToken = this.userTokens.get(userId);
     if (!userToken) {
+      console.error(`No token found for user ${userId}`);
       throw new Error('User not authenticated with Spotify');
     }
 
+    console.log(`Token status for user ${userId}:`, {
+      hasAccessToken: !!userToken.accessToken,
+      hasRefreshToken: !!userToken.refreshToken,
+      expiresAt: new Date(userToken.expiresAt).toISOString(),
+      isExpired: Date.now() >= userToken.expiresAt
+    });
+
     // Check if token is expired
     if (Date.now() >= userToken.expiresAt) {
+      console.log(`Token expired for user ${userId}, refreshing...`);
       await this.refreshAccessToken(userId);
     } else {
+      console.log(`Using existing valid token for user ${userId}`);
       spotifyApi.setAccessToken(userToken.accessToken);
     }
   }
@@ -115,13 +138,20 @@ class SpotifyService {
     await this.ensureValidToken(userId);
     
     try {
+      console.log(`Getting top tracks for user ${userId}, timeRange: ${timeRange}, limit: ${limit}`);
       const data = await spotifyApi.getMyTopTracks({
         time_range: timeRange, // short_term, medium_term, long_term
         limit: limit
       });
+      console.log(`Successfully retrieved ${data.body.items.length} top tracks`);
       return data.body.items;
     } catch (error) {
       console.error('Error getting top tracks:', error);
+      console.error('Error details:', {
+        message: error.message,
+        statusCode: error.statusCode,
+        body: error.body
+      });
       throw error;
     }
   }
@@ -173,12 +203,34 @@ class SpotifyService {
   // Your custom algorithm to select song of the day
   async getSongOfTheDay(userId) {
     try {
+      console.log(`Getting song of the day for user ${userId}`);
+      
       // Get user's music data
+      console.log('Fetching user music data...');
       const [topTracks, recentlyPlayed, topArtists] = await Promise.all([
-        this.getTopTracks(userId, 'medium_term', 50),
-        this.getRecentlyPlayed(userId, 50),
-        this.getTopArtists(userId, 'medium_term', 20)
+        this.getTopTracks(userId, 'medium_term', 50).catch(error => {
+          console.error('Failed to get top tracks:', error);
+          return [];
+        }),
+        this.getRecentlyPlayed(userId, 50).catch(error => {
+          console.error('Failed to get recently played:', error);
+          return [];
+        }),
+        this.getTopArtists(userId, 'medium_term', 20).catch(error => {
+          console.error('Failed to get top artists:', error);
+          return [];
+        })
       ]);
+
+      console.log('Music data retrieved:', {
+        topTracksCount: topTracks.length,
+        recentlyPlayedCount: recentlyPlayed.length,
+        topArtistsCount: topArtists.length
+      });
+
+      if (topTracks.length === 0 && recentlyPlayed.length === 0) {
+        throw new Error('No music data available - user may need to listen to more music on Spotify');
+      }
 
       // Your custom algorithm here
       const songOfTheDay = await this.selectSongAlgorithm({
@@ -187,9 +239,15 @@ class SpotifyService {
         topArtists
       });
 
+      console.log(`Song of the day selected: ${songOfTheDay?.name || 'None'}`);
       return songOfTheDay;
     } catch (error) {
-      console.error('Error getting song of the day:', error);
+      console.error('Error getting song of the day:', {
+        message: error.message,
+        statusCode: error.statusCode,
+        body: error.body,
+        stack: error.stack
+      });
       throw error;
     }
   }

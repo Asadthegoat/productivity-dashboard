@@ -229,7 +229,8 @@ class SpotifyService {
       });
 
       if (topTracks.length === 0 && recentlyPlayed.length === 0) {
-        throw new Error('No music data available - user may need to listen to more music on Spotify');
+        console.log('No music data available - returning null to indicate need for more listening history');
+        return null; // Return null instead of throwing error
       }
 
       // Your custom algorithm here

@@ -31,6 +31,9 @@ export default function SongOfTheDay() {
   const [audioProgress, setAudioProgress] = useState(0);
   const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
   const [needsAuth, setNeedsAuth] = useState(false);
+  const [needsMoreMusic, setNeedsMoreMusic] = useState(false);
+  const [backendError, setBackendError] = useState(false);
+  const [authError, setAuthError] = useState(false);
 
   // Check authentication status on mount
   useEffect(() => {
@@ -94,29 +97,69 @@ export default function SongOfTheDay() {
 
   const checkAuthStatus = async () => {
     try {
+      console.log('Checking auth status...'); // Debug log
       const response = await fetch(`${BASE_URL}/api/spotify/auth-status/${defaultUserId}`);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
       const data = await response.json();
+      console.log('Auth status response:', data); // Debug log
       setIsAuthenticated(data.authenticated);
+      setBackendError(false);
+      setAuthError(false);
     } catch (error) {
       console.error('Error checking auth status:', error);
+      console.log('BASE_URL being used:', BASE_URL); // Debug log
       setIsAuthenticated(false);
+      setAuthError(true);
+      if (error instanceof Error && error.message.includes('fetch')) {
+        setBackendError(true);
+      }
     }
   };
 
   const fetchSongOfTheDay = async () => {
     setLoading(true);
     try {
+      console.log('Fetching song of the day...'); // Debug log
       const response = await fetch(`${BASE_URL}/api/spotify/song-of-the-day/${defaultUserId}`);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
       const data = await response.json();
+      console.log('Song of the day response:', data); // Debug log
       
       if (data.success) {
         setSong(data.song);
         setNeedsAuth(false);
+        setNeedsMoreMusic(false);
+        setBackendError(false);
+        setAuthError(false);
       } else if (data.needsAuth) {
         setNeedsAuth(true);
+        setNeedsMoreMusic(false);
+        setBackendError(false);
+        setAuthError(true);
+      } else if (data.needsMoreMusic) {
+        setNeedsMoreMusic(true);
+        setNeedsAuth(false);
+        setBackendError(false);
+        setAuthError(false);
       }
     } catch (error) {
       console.error('Error fetching song of the day:', error);
+      console.log('Fetch URL:', `${BASE_URL}/api/spotify/song-of-the-day/${defaultUserId}`); // Debug log
+      
+      if (error instanceof Error && error.message.includes('fetch')) {
+        setBackendError(true);
+      } else {
+        setAuthError(true);
+        setNeedsAuth(true);
+      }
     } finally {
       setLoading(false);
     }
@@ -248,7 +291,8 @@ export default function SongOfTheDay() {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  if (needsAuth || !isAuthenticated) {
+  // Show backend error state
+  if (backendError) {
     return (
       <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700">
         <div className="flex items-center gap-3 mb-4">
@@ -257,26 +301,141 @@ export default function SongOfTheDay() {
         </div>
         
         <div className="text-center py-8">
-          <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+          <div className="w-16 h-16 bg-gradient-to-br from-red-500 to-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
             <Music className="w-8 h-8 text-white" />
           </div>
-          <h3 className="text-white font-medium mb-2">Connect Your Spotify</h3>
+          <h3 className="text-white font-medium mb-2">Backend Not Available</h3>
           <p className="text-gray-400 text-sm mb-4">
-            Connect your Spotify account to get personalized song recommendations based on your listening history.
+            Unable to connect to the backend server. This could be because:
           </p>
-          <div className="flex flex-col gap-2 items-center">
+          <ul className="text-gray-400 text-xs mb-4 text-left max-w-sm mx-auto space-y-1">
+            <li>• The backend is still deploying to Render</li>
+            <li>• The Render service is sleeping (free tier)</li>
+            <li>• Network connectivity issues</li>
+          </ul>
+          <button
+            onClick={() => {
+              setBackendError(false);
+              checkAuthStatus();
+              fetchSongOfTheDay();
+            }}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+          >
+            Try Again
+          </button>
+          <p className="text-xs text-gray-500 mt-3">
+            Trying to connect to: {BASE_URL}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show account switching interface for auth issues
+  if (authError || needsAuth || !isAuthenticated) {
+    return (
+      <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700">
+        <div className="flex items-center gap-3 mb-4">
+          <Music className="w-5 h-5 text-purple-400" />
+          <h2 className="text-lg font-semibold text-white">Song of the Day</h2>
+        </div>
+        
+        {/* Prominent Account Switching Section */}
+        <div className="bg-gradient-to-r from-green-900 to-green-800 rounded-lg p-4 mb-4 border border-green-600">
+          <div className="flex items-center gap-3 mb-3">
+            <User className="w-5 h-5 text-green-400" />
+            <h3 className="text-white font-medium">Spotify Account Required</h3>
+          </div>
+          <p className="text-green-100 text-sm mb-4">
+            {authError 
+              ? "There was an issue with your Spotify authentication. Please connect or switch accounts."
+              : "Connect your Spotify account to get personalized song recommendations."
+            }
+          </p>
+          <div className="flex flex-col gap-3">
             <button
-              onClick={handleSpotifyAuth}
-              className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-medium transition-colors inline-flex items-center gap-2"
+              onClick={() => handleSpotifyAuth(true)}
+              className="bg-green-500 hover:bg-green-600 text-white px-4 py-3 rounded-lg font-medium transition-colors inline-flex items-center gap-2 text-center justify-center"
+            >
+              <User className="w-4 h-4" />
+              Switch Spotify Account
+            </button>
+            <button
+              onClick={() => handleSpotifyAuth(false)}
+              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors inline-flex items-center gap-2 text-center justify-center"
             >
               <Music className="w-4 h-4" />
               Connect Spotify
             </button>
-            {!needsAuth && (
-              <p className="text-xs text-gray-500 mt-2">
-                Want to use a different account? Click connect to switch accounts.
-              </p>
-            )}
+          </div>
+        </div>
+        
+        <div className="text-center py-4">
+          <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Music className="w-8 h-8 text-white" />
+          </div>
+          <div className="text-gray-400 text-xs space-y-2">
+            <p>Need help switching accounts?</p>
+            <ul className="space-y-1">
+              <li>• Use "Switch Account" to choose a different Spotify account</li>
+              <li>• Make sure the account has some music listening history</li>
+              <li>• Try logging out of Spotify.com first if switching doesn't work</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (needsMoreMusic) {
+    return (
+      <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <Music className="w-5 h-5 text-purple-400" />
+            <h2 className="text-lg font-semibold text-white">Song of the Day</h2>
+          </div>
+          <button
+            onClick={disconnectSpotify}
+            className="p-2 bg-red-600 text-white hover:bg-red-700 rounded-lg transition-colors border border-red-500"
+            title="Switch to different Spotify account"
+          >
+            <User className="w-4 h-4" />
+          </button>
+        </div>
+        
+        <div className="text-center py-8">
+          <div className="w-16 h-16 bg-gradient-to-br from-yellow-500 to-orange-500 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Music className="w-8 h-8 text-white" />
+          </div>
+          <h3 className="text-white font-medium mb-2">Need More Listening History</h3>
+          <p className="text-gray-400 text-sm mb-4">
+            This Spotify account doesn't have enough listening history to generate recommendations.
+          </p>
+          <div className="flex flex-col gap-3 items-center">
+            <div className="bg-gray-700 rounded-lg p-4 max-w-sm">
+              <p className="text-gray-300 text-sm mb-3">Try one of these options:</p>
+              <ul className="text-gray-400 text-xs space-y-2 text-left">
+                <li>• Listen to music on Spotify first, then refresh</li>
+                <li>• Switch to a different Spotify account with more history</li>
+                <li>• Create some playlists and play music from them</li>
+              </ul>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={fetchSongOfTheDay}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+              >
+                Refresh
+              </button>
+              <button
+                onClick={disconnectSpotify}
+                className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors inline-flex items-center gap-1"
+              >
+                <User className="w-3 h-3" />
+                Switch Account
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -315,14 +474,33 @@ export default function SongOfTheDay() {
             </button>
             <button
               onClick={disconnectSpotify}
-              className="p-2 bg-red-600 text-white hover:bg-red-700 rounded-lg transition-colors border border-red-500"
-              title="Disconnect and reconnect Spotify"
+              className="p-2 bg-green-600 text-white hover:bg-green-700 rounded-lg transition-colors border border-green-500"
+              title="Switch Spotify account"
             >
-              <LogOut className="w-4 h-4" />
+              <User className="w-4 h-4" />
             </button>
           </div>
         </div>
-        <div className="text-center py-8">
+        
+        {/* Prominent Account Switching Section */}
+        <div className="bg-gradient-to-r from-yellow-900 to-orange-900 rounded-lg p-4 mb-4 border border-yellow-600">
+          <div className="flex items-center gap-3 mb-3">
+            <User className="w-5 h-5 text-yellow-400" />
+            <h3 className="text-white font-medium">Need Different Account?</h3>
+          </div>
+          <p className="text-yellow-100 text-sm mb-3">
+            Current account might not have enough listening history. Try switching to an account with more Spotify activity.
+          </p>
+          <button
+            onClick={disconnectSpotify}
+            className="bg-yellow-500 hover:bg-yellow-600 text-black px-4 py-2 rounded-lg font-medium transition-colors inline-flex items-center gap-2 w-full justify-center"
+          >
+            <User className="w-4 h-4" />
+            Switch to Different Account
+          </button>
+        </div>
+        
+        <div className="text-center py-6">
           <div className="w-16 h-16 bg-gradient-to-br from-yellow-500 to-orange-500 rounded-full flex items-center justify-center mx-auto mb-4">
             <Music className="w-8 h-8 text-white" />
           </div>
@@ -340,14 +518,8 @@ export default function SongOfTheDay() {
             >
               Try Again
             </button>
-            <button
-              onClick={() => handleSpotifyAuth(true)}
-              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm transition-colors"
-            >
-              Reconnect Spotify
-            </button>
             <p className="text-xs text-gray-500 mt-2 max-w-sm">
-              If this persists, try: 1) Listen to music on Spotify first, 2) Disconnect and reconnect your account, 3) Make sure you have some listening history
+              If this persists: 1) Switch accounts using the yellow button above, 2) Listen to music on Spotify first, 3) Make sure you have some listening history
             </p>
           </div>
         </div>
@@ -374,10 +546,10 @@ export default function SongOfTheDay() {
           </button>
           <button
             onClick={disconnectSpotify}
-            className="p-2 bg-red-600 text-white hover:bg-red-700 rounded-lg transition-colors border border-red-500"
-            title="Disconnect Spotify account"
+            className="p-2 bg-green-600 text-white hover:bg-green-700 rounded-lg transition-colors border border-green-500"
+            title="Switch Spotify account"
           >
-            <LogOut className="w-4 h-4" />
+            <User className="w-4 h-4" />
           </button>
         </div>
       </div>

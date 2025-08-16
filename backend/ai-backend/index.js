@@ -975,8 +975,9 @@ app.get('/api/spotify/song-of-the-day/:userId', async (req, res) => {
     } else {
       res.json({ 
         success: false, 
-        error: 'No song could be selected',
-        message: 'Make sure you have listened to music recently on Spotify'
+        error: 'No music data available',
+        message: 'This account needs more Spotify listening history. Try listening to music on Spotify first, or switch to a different account.',
+        needsMoreMusic: true
       });
     }
   } catch (error) {

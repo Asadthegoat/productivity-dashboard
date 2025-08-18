@@ -19,9 +19,13 @@ const io = new Server(server, {
     origin: [
       process.env.FRONTEND_URL || "http://localhost:3000",
       /^https:\/\/.*\.vercel\.app$/,  // Allow any Vercel domain
-      /^https:\/\/v0-.*\.vercel\.app$/  // Allow v0 dev chat domains
+      /^https:\/\/v0-.*\.vercel\.app$/,  // Allow v0 dev chat domains
+      /^https:\/\/preview-.*\.frcontent\.net$/,  // Allow preview domains
+      /^https:\/\/.*\.frcontent\.net$/,  // Allow other frcontent domains
+      "https://productivity-dashboard-218x.onrender.com"  // Allow same-origin requests
     ],
-    methods: ["GET", "POST"]
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    credentials: true
   }
 });
 
@@ -34,11 +38,19 @@ app.use(cors({
   origin: [
     process.env.FRONTEND_URL || "http://localhost:3000",
     /^https:\/\/.*\.vercel\.app$/,  // Allow any Vercel domain
-    /^https:\/\/v0-.*\.vercel\.app$/  // Allow v0 dev chat domains
+    /^https:\/\/v0-.*\.vercel\.app$/,  // Allow v0 dev chat domains
+    /^https:\/\/preview-.*\.frcontent\.net$/,  // Allow preview domains
+    /^https:\/\/.*\.frcontent\.net$/,  // Allow other frcontent domains
+    "https://productivity-dashboard-218x.onrender.com"  // Allow same-origin requests
   ],
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With']
 }));
 app.use(express.json());
+
+// Handle preflight requests
+app.options('*', cors());
 
 // Debug logging to see what's actually being used
 console.log('=== DATABASE CONNECTION DEBUG ===');

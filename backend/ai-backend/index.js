@@ -16,31 +16,7 @@ const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: function(origin, callback) {
-      // Allow requests with no origin (like mobile apps or curl requests)
-      if (!origin) return callback(null, true);
-      
-      const allowedOrigins = [
-        process.env.FRONTEND_URL || "http://localhost:3000",
-        /^https:\/\/.*\.vercel\.app$/,  // Allow any Vercel domain
-        /^https:\/\/v0-.*\.vercel\.app$/,  // Allow v0 dev chat domains
-        /^https:\/\/preview-.*\.frcontent\.net$/,  // Allow preview domains
-        /^https:\/\/.*\.frcontent\.net$/,  // Allow other frcontent domains
-        "https://productivity-dashboard-218x.onrender.com"  // Allow same-origin requests
-      ];
-      
-      const isAllowed = allowedOrigins.some(allowed => {
-        if (typeof allowed === 'string') {
-          return allowed === origin;
-        } else if (allowed instanceof RegExp) {
-          return allowed.test(origin);
-        }
-        return false;
-      });
-      
-      console.log(`WebSocket CORS Check - Origin: ${origin}, Allowed: ${isAllowed}`);
-      callback(null, isAllowed);
-    },
+    origin: true, // This will reflect the request origin back
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true
   }
@@ -52,56 +28,56 @@ const NEWS_API_KEY = process.env.NEWS_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 app.use(cors({
-  origin: function(origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    const allowedOrigins = [
-      process.env.FRONTEND_URL || "http://localhost:3000",
-      /^https:\/\/.*\.vercel\.app$/,  // Allow any Vercel domain
-      /^https:\/\/v0-.*\.vercel\.app$/,  // Allow v0 dev chat domains
-      /^https:\/\/preview-.*\.frcontent\.net$/,  // Allow preview domains
-      /^https:\/\/.*\.frcontent\.net$/,  // Allow other frcontent domains
-      "https://productivity-dashboard-218x.onrender.com"  // Allow same-origin requests
-    ];
-    
-    const isAllowed = allowedOrigins.some(allowed => {
-      if (typeof allowed === 'string') {
-        return allowed === origin;
-      } else if (allowed instanceof RegExp) {
-        return allowed.test(origin);
-      }
-      return false;
-    });
-    
-    console.log(`CORS Check - Origin: ${origin}, Allowed: ${isAllowed}`);
-    callback(null, isAllowed);
-  },
+  origin: true, // This will reflect the request origin back
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With']
 }));
 app.use(express.json());
 
-// Handle preflight requests with explicit debugging
-app.options('*', (req, res) => {
-  console.log(`OPTIONS preflight request from origin: ${req.headers.origin}`);
-  console.log('Request headers:', req.headers);
+// Middleware to ensure CORS headers are always set
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
   
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
+  // List of allowed origins
+  const allowedOrigins = [
+    process.env.FRONTEND_URL || "http://localhost:3000",
+    "https://productivity-dashboard-218x.onrender.com"
+  ];
   
-  console.log('Preflight response sent');
-  res.sendStatus(200);
+  // Check regex patterns
+  const allowedPatterns = [
+    /^https:\/\/.*\.vercel\.app$/,
+    /^https:\/\/v0-.*\.vercel\.app$/,
+    /^https:\/\/preview-.*\.frcontent\.net$/,
+    /^https:\/\/.*\.frcontent\.net$/
+  ];
+  
+  // Check if origin is allowed
+  let isAllowed = false;
+  if (!origin) {
+    isAllowed = true; // Allow requests with no origin
+  } else if (allowedOrigins.includes(origin)) {
+    isAllowed = true;
+  } else {
+    isAllowed = allowedPatterns.some(pattern => pattern.test(origin));
+  }
+  
+  if (isAllowed) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
+    res.header('Access-Control-Allow-Credentials', 'true');
+  }
+  
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path} from ${origin || 'unknown origin'} - CORS: ${isAllowed ? 'ALLOWED' : 'BLOCKED'}`);
+  next();
 });
 
-// Debug middleware to log all requests
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path} from ${req.headers.origin || 'unknown origin'}`);
-  next();
+// Handle preflight requests
+app.options('*', (req, res) => {
+  console.log(`OPTIONS preflight request from origin: ${req.headers.origin}`);
+  res.sendStatus(200);
 });
 
 // Debug logging to see what's actually being used

@@ -286,7 +286,15 @@ class SpotifyService {
       selectedTrack = this.selectByEnergy(availableTracks, 'low');
     }
 
-    return selectedTrack || availableTracks[0]; // Fallback to first available track
+    // Ensure the selected track has all necessary fields including URI
+    const selectedTrackWithFullData = selectedTrack || availableTracks[0];
+    
+    if (selectedTrackWithFullData && !selectedTrackWithFullData.uri) {
+      // If URI is missing, add it based on the track ID
+      selectedTrackWithFullData.uri = `spotify:track:${selectedTrackWithFullData.id}`;
+    }
+    
+    return selectedTrackWithFullData;
   }
 
   // Helper method to select by energy level
@@ -312,7 +320,8 @@ class SpotifyService {
         preview_url: data.body.preview_url,
         external_urls: data.body.external_urls,
         images: data.body.album.images,
-        duration_ms: data.body.duration_ms
+        duration_ms: data.body.duration_ms,
+        uri: data.body.uri // Add URI for Web Playback SDK
       };
     } catch (error) {
       console.error('Error getting track playback info:', error);
@@ -354,6 +363,89 @@ class SpotifyService {
   // Get user authentication status
   isUserAuthenticated(userId) {
     return this.userTokens.has(userId);
+  }
+
+  // Get user token (for Web Playback SDK)
+  getUserToken(userId) {
+    return this.userTokens.get(userId);
+  }
+
+  // Transfer playback to a specific device (for Web Playback SDK)
+  async transferPlayback(userId, deviceId) {
+    await this.ensureValidToken(userId);
+    
+    try {
+      console.log(`Transferring playback for user ${userId} to device ${deviceId}`);
+      await spotifyApi.transferMyPlayback([deviceId]);
+      console.log('Playback transfer successful');
+      return { success: true };
+    } catch (error) {
+      console.error('Error transferring playback:', error);
+      throw error;
+    }
+  }
+
+  // Play a specific track
+  async playTrack(userId, trackUri, deviceId = null) {
+    await this.ensureValidToken(userId);
+    
+    try {
+      console.log(`Playing track ${trackUri} for user ${userId}`);
+      const options = {
+        uris: [trackUri]
+      };
+      
+      if (deviceId) {
+        options.device_id = deviceId;
+      }
+      
+      await spotifyApi.play(options);
+      console.log('Track playback started successfully');
+      return { success: true };
+    } catch (error) {
+      console.error('Error playing track:', error);
+      throw error;
+    }
+  }
+
+  // Pause playback
+  async pausePlayback(userId, deviceId = null) {
+    await this.ensureValidToken(userId);
+    
+    try {
+      console.log(`Pausing playback for user ${userId}`);
+      const options = {};
+      if (deviceId) {
+        options.device_id = deviceId;
+      }
+      
+      await spotifyApi.pause(options);
+      console.log('Playback paused successfully');
+      return { success: true };
+    } catch (error) {
+      console.error('Error pausing playback:', error);
+      throw error;
+    }
+  }
+
+  // Resume playback
+  async resumePlayback(userId, deviceId = null) {
+    await this.ensureValidToken(userId);
+    
+    try {
+      console.log(`Resuming playback for user ${userId}`);
+      const options = {};
+      if (deviceId) {
+        options.device_id = deviceId;
+      }
+      
+      await spotifyApi.play(options);
+      console.log('Playback resumed successfully');
+      return { success: true };
+    } catch (error) {
+      console.error('Error resuming playback:', error);
+      throw error;
+    }
   }
 }
 

@@ -1094,6 +1094,123 @@ app.get('/api/spotify/stats/:userId', async (req, res) => {
   }
 });
 
+// Get user's Spotify access token for Web Playback SDK
+app.get('/api/spotify/token/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Ensure we have a valid token
+    await spotifyService.ensureValidToken(userId);
+    
+    // Get the current access token
+    const token = spotifyService.getUserToken(userId);
+    
+    if (!token) {
+      return res.status(401).json({ 
+        error: 'User not authenticated with Spotify',
+        needsAuth: true
+      });
+    }
+    
+    res.json({
+      success: true,
+      access_token: token.accessToken,
+      expires_at: token.expiresAt
+    });
+  } catch (error) {
+    console.error('Error getting Spotify access token:', error);
+    
+    if (error.message.includes('not authenticated')) {
+      res.status(401).json({ 
+        error: 'User not authenticated with Spotify',
+        needsAuth: true
+      });
+    } else {
+      res.status(500).json({ error: 'Failed to get access token' });
+    }
+  }
+});
+
+// Transfer playback to Web Playback SDK
+app.post('/api/spotify/transfer-playback/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { device_id } = req.body;
+    
+    if (!device_id) {
+      return res.status(400).json({ error: 'Device ID is required' });
+    }
+    
+    const result = await spotifyService.transferPlayback(userId, device_id);
+    
+    res.json({
+      success: true,
+      message: 'Playback transferred to web player'
+    });
+  } catch (error) {
+    console.error('Error transferring playback:', error);
+    res.status(500).json({ error: 'Failed to transfer playback' });
+  }
+});
+
+// Play a specific track
+app.post('/api/spotify/play/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { track_uri, device_id } = req.body;
+    
+    if (!track_uri) {
+      return res.status(400).json({ error: 'Track URI is required' });
+    }
+    
+    const result = await spotifyService.playTrack(userId, track_uri, device_id);
+    
+    res.json({
+      success: true,
+      message: 'Track started playing'
+    });
+  } catch (error) {
+    console.error('Error playing track:', error);
+    res.status(500).json({ error: 'Failed to play track' });
+  }
+});
+
+// Pause playback
+app.post('/api/spotify/pause/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { device_id } = req.body;
+    
+    await spotifyService.pausePlayback(userId, device_id);
+    
+    res.json({
+      success: true,
+      message: 'Playback paused'
+    });
+  } catch (error) {
+    console.error('Error pausing playback:', error);
+    res.status(500).json({ error: 'Failed to pause playback' });
+  }
+});
+
+// Resume playback
+app.post('/api/spotify/resume/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { device_id } = req.body;
+    
+    await spotifyService.resumePlayback(userId, device_id);
+    
+    res.json({
+      success: true,
+      message: 'Playback resumed'
+    });
+  } catch (error) {
+    console.error('Error resuming playback:', error);
+    res.status(500).json({ error: 'Failed to resume playback' });
+  }
+});
+
 // Check user's authentication status
 app.get('/api/spotify/auth-status/:userId', async (req, res) => {
   try {

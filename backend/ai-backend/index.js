@@ -1098,35 +1098,43 @@ app.get('/api/spotify/stats/:userId', async (req, res) => {
 app.get('/api/spotify/token/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    console.log(`Getting access token for user ${userId}`);
     
     // Ensure we have a valid token
     await spotifyService.ensureValidToken(userId);
     
     // Get the current access token
-    const token = spotifyService.getUserToken(userId);
+    const tokenData = spotifyService.getUserToken(userId);
     
-    if (!token) {
+    if (!tokenData || !tokenData.accessToken) {
+      console.log(`No token found for user ${userId}`);
       return res.status(401).json({ 
+        success: false,
         error: 'User not authenticated with Spotify',
         needsAuth: true
       });
     }
     
+    console.log(`Returning access token for user ${userId}`);
     res.json({
       success: true,
-      access_token: token.accessToken,
-      expires_at: token.expiresAt
+      access_token: tokenData.accessToken,
+      expires_at: tokenData.expiresAt
     });
   } catch (error) {
     console.error('Error getting Spotify access token:', error);
     
     if (error.message.includes('not authenticated')) {
       res.status(401).json({ 
+        success: false,
         error: 'User not authenticated with Spotify',
         needsAuth: true
       });
     } else {
-      res.status(500).json({ error: 'Failed to get access token' });
+      res.status(500).json({ 
+        success: false,
+        error: 'Failed to get access token' 
+      });
     }
   }
 });

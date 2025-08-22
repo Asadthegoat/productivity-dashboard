@@ -50,7 +50,8 @@ app.use((req, res, next) => {
     /^https:\/\/.*\.vercel\.app$/,
     /^https:\/\/v0-.*\.vercel\.app$/,
     /^https:\/\/preview-.*\.frcontent\.net$/,
-    /^https:\/\/.*\.frcontent\.net$/
+    /^https:\/\/.*\.frcontent\.net$/,
+    /^https:\/\/.*\.vusercontent\.net$/  // Add this for v0.dev domains
   ];
   
   // Check if origin is allowed
@@ -60,14 +61,24 @@ app.use((req, res, next) => {
   } else if (allowedOrigins.includes(origin)) {
     isAllowed = true;
   } else {
-    isAllowed = allowedPatterns.some(pattern => pattern.test(origin));
+    isAllowed = allowedPatterns.some(pattern => {
+      const match = pattern.test(origin);
+      if (match) {
+        console.log(`Origin ${origin} matched pattern ${pattern}`);
+      }
+      return match;
+    });
   }
+  
+  console.log(`CORS Check - Origin: ${origin}, Allowed: ${isAllowed}`);
   
   if (isAllowed) {
     res.header('Access-Control-Allow-Origin', origin || '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
     res.header('Access-Control-Allow-Credentials', 'true');
+  } else {
+    console.log(`CORS BLOCKED - Origin ${origin} not in allowed list or patterns`);
   }
   
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path} from ${origin || 'unknown origin'} - CORS: ${isAllowed ? 'ALLOWED' : 'BLOCKED'}`);

@@ -831,7 +831,7 @@ For general conversation, questions, or greetings, respond normally and motivati
 
     // GROQ API integration with upgraded model
     const groqPayload = {
-      model: "llama-3.1-70b-versatile",
+      model: "llama-3.3-70b-versatile",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: message }

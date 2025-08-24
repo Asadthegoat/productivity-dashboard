@@ -149,8 +149,8 @@ const getUserData = async (userId = 1) => {
     
     // Get user preferences and daily schedules for scheduling assistant
     const userPreferencesResult = await pool.query('SELECT * FROM user_preferences WHERE user_id = $1', [userId]);
-    const todayScheduleResult = await pool.query('SELECT * FROM daily_schedules WHERE user_id = $1 AND schedule_date = CURRENT_DATE', [userId]);
-    const tomorrowScheduleResult = await pool.query('SELECT * FROM daily_schedules WHERE user_id = $1 AND schedule_date = CURRENT_DATE + INTERVAL \'1 day\'', [userId]);
+    const todayScheduleResult = await pool.query('SELECT * FROM daily_schedules WHERE user_id = $1 AND date = CURRENT_DATE', [userId]);
+    const tomorrowScheduleResult = await pool.query('SELECT * FROM daily_schedules WHERE user_id = $1 AND date = CURRENT_DATE + INTERVAL \'1 day\'', [userId]);
     
     console.log('Raw calendarResult.rows:', calendarResult.rows);
     // Debug: print type and value of start_time for each event
@@ -201,7 +201,7 @@ const generateAISchedule = async (userId, date) => {
     const userPrefs = await pool.query('SELECT * FROM user_preferences WHERE user_id = $1', [userId]);
     const activeGoals = await pool.query('SELECT * FROM goals WHERE user_id = $1 AND completed = false', [userId]);
     const calendarEvents = await pool.query('SELECT * FROM calendar_events WHERE user_id = $1 AND start_time::date = $2', [userId, date]);
-    const recentSchedules = await pool.query('SELECT * FROM daily_schedules WHERE user_id = $1 ORDER BY schedule_date DESC LIMIT 7', [userId]);
+    const recentSchedules = await pool.query('SELECT * FROM daily_schedules WHERE user_id = $1 ORDER BY date DESC LIMIT 7', [userId]);
     
     const userPreferences = userPrefs.rows[0];
     const goals = activeGoals.rows;

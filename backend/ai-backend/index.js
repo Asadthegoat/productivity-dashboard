@@ -146,6 +146,12 @@ const getUserData = async (userId = 1) => {
     const workoutResult = await pool.query('SELECT * FROM workout_log WHERE user_id = $1', [userId]);
     const eatingGoalsResult = await pool.query('SELECT * FROM eating_goals WHERE user_id = $1', [userId]);
     const calendarResult = await pool.query('SELECT * FROM calendar_events WHERE user_id = $1', [userId]);
+    
+    // Get user preferences and daily schedules for scheduling assistant
+    const userPreferencesResult = await pool.query('SELECT * FROM user_preferences WHERE user_id = $1', [userId]);
+    const todayScheduleResult = await pool.query('SELECT * FROM daily_schedules WHERE user_id = $1 AND schedule_date = CURRENT_DATE', [userId]);
+    const tomorrowScheduleResult = await pool.query('SELECT * FROM daily_schedules WHERE user_id = $1 AND schedule_date = CURRENT_DATE + INTERVAL \'1 day\'', [userId]);
+    
     console.log('Raw calendarResult.rows:', calendarResult.rows);
     // Debug: print type and value of start_time for each event
     if (calendarResult.rows && calendarResult.rows.length > 0) {
@@ -179,11 +185,180 @@ const getUserData = async (userId = 1) => {
       eatingGoals: eatingGoalsResult.rows,
       news: newsResult.rows,
       calendar: calendarEvents,
+      userPreferences: userPreferencesResult.rows[0] || null,
+      todaySchedule: todayScheduleResult.rows[0] || null,
+      tomorrowSchedule: tomorrowScheduleResult.rows[0] || null,
       level: user?.level || 1,
       xp: user?.xp || 0,
       maxXp: user?.max_xp || 1000
     };
 }
+
+// AI-powered schedule generation function
+const generateAISchedule = async (userId, date) => {
+  try {
+    // Get user preferences, goals, existing calendar events
+    const userPrefs = await pool.query('SELECT * FROM user_preferences WHERE user_id = $1', [userId]);
+    const activeGoals = await pool.query('SELECT * FROM goals WHERE user_id = $1 AND completed = false', [userId]);
+    const calendarEvents = await pool.query('SELECT * FROM calendar_events WHERE user_id = $1 AND start_time::date = $2', [userId, date]);
+    const recentSchedules = await pool.query('SELECT * FROM daily_schedules WHERE user_id = $1 ORDER BY schedule_date DESC LIMIT 7', [userId]);
+    
+    const userPreferences = userPrefs.rows[0];
+    const goals = activeGoals.rows;
+    const existingEvents = calendarEvents.rows;
+    const scheduleHistory = recentSchedules.rows;
+
+    // If no preferences set yet, return basic template
+    if (!userPreferences) {
+      return {
+        message: "Please set up your daily routine preferences first by telling me about your typical day (wake time, work hours, preferred workout time, etc.)",
+        needsSetup: true,
+        schedule: []
+      };
+    }
+
+    // Create time slots (30-minute intervals)
+    const schedule = [];
+    const startHour = parseInt(userPreferences.wake_time?.split(':')[0] || '7');
+    const endHour = parseInt(userPreferences.sleep_time?.split(':')[0] || '23');
+
+    // Generate base routine schedule
+    let currentTime = startHour * 60; // Convert to minutes
+    const endTime = endHour * 60;
+
+    // Morning routine
+    schedule.push({
+      time: formatMinutesToTime(currentTime),
+      activity: "Morning routine & breakfast",
+      type: "routine",
+      duration: 60,
+      energy_level: "medium"
+    });
+    currentTime += 60;
+
+    // Work blocks
+    const workStart = userPreferences.work_start ? timeToMinutes(userPreferences.work_start) : 9 * 60;
+    const workEnd = userPreferences.work_end ? timeToMinutes(userPreferences.work_end) : 17 * 60;
+
+    // Schedule goal-related activities before work
+    for (const goal of goals.slice(0, 2)) { // Limit to 2 goals per day
+      if (currentTime < workStart - 30) {
+        schedule.push({
+          time: formatMinutesToTime(currentTime),
+          activity: `Work on: ${goal.text}`,
+          type: "goal",
+          duration: 30,
+          energy_level: "high",
+          goal_id: goal.id
+        });
+        currentTime += 30;
+      }
+    }
+
+    // Work time
+    if (currentTime < workStart) currentTime = workStart;
+    schedule.push({
+      time: formatMinutesToTime(currentTime),
+      activity: "Work/Focus time",
+      type: "work",
+      duration: workEnd - workStart,
+      energy_level: "high"
+    });
+    currentTime = workEnd;
+
+    // Lunch break
+    schedule.push({
+      time: formatMinutesToTime(currentTime),
+      activity: "Lunch break",
+      type: "break",
+      duration: 60,
+      energy_level: "low"
+    });
+    currentTime += 60;
+
+    // Workout (if preferred time is after work)
+    const workoutPref = userPreferences.preferred_workout_time;
+    if (workoutPref === 'evening' && currentTime < endTime - 120) {
+      schedule.push({
+        time: formatMinutesToTime(currentTime),
+        activity: "Workout/Exercise",
+        type: "fitness",
+        duration: 60,
+        energy_level: "high"
+      });
+      currentTime += 60;
+    }
+
+    // Personal time / remaining goals
+    for (const goal of goals.slice(2, 4)) {
+      if (currentTime < endTime - 90) {
+        schedule.push({
+          time: formatMinutesToTime(currentTime),
+          activity: `Personal: ${goal.text}`,
+          type: "personal",
+          duration: 45,
+          energy_level: "medium",
+          goal_id: goal.id
+        });
+        currentTime += 45;
+      }
+    }
+
+    // Evening routine
+    if (currentTime < endTime - 60) {
+      schedule.push({
+        time: formatMinutesToTime(currentTime),
+        activity: "Dinner & evening routine",
+        type: "routine",
+        duration: 90,
+        energy_level: "low"
+      });
+      currentTime += 90;
+    }
+
+    // Wind down time
+    schedule.push({
+      time: formatMinutesToTime(Math.max(currentTime, endTime - 60)),
+      activity: "Wind down & prepare for sleep",
+      type: "routine",
+      duration: 60,
+      energy_level: "low"
+    });
+
+    return {
+      message: "Generated personalized schedule based on your preferences and goals",
+      needsSetup: false,
+      schedule: schedule,
+      generatedAt: new Date().toISOString(),
+      preferences_used: {
+        wake_time: userPreferences.wake_time,
+        work_hours: `${userPreferences.work_start}-${userPreferences.work_end}`,
+        workout_preference: userPreferences.preferred_workout_time
+      }
+    };
+
+  } catch (error) {
+    console.error('Error generating AI schedule:', error);
+    return {
+      message: "Error generating schedule. Please try again.",
+      needsSetup: false,
+      schedule: [],
+      error: error.message
+    };
+  }
+};
+
+// Helper functions for time conversion
+const timeToMinutes = (timeString) => {
+  const [hours, minutes] = timeString.split(':').map(Number);
+  return hours * 60 + minutes;
+};
+
+const formatMinutesToTime = (minutes) => {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+};
 // Calendar API endpoints
 app.post('/api/calendar', async (req, res) => {
   try {
@@ -545,7 +720,7 @@ app.post('/chat', async (req, res) => {
     const dashboardData = await getUserData(userId);
     
     // Create a system prompt that gives the AI context about the dashboard, including actual data
-    const systemPrompt = `You are A.S.A.D (AI-powered Smart Assistant for Dashboard), a productivity assistant that helps users manage their dashboard.
+    const systemPrompt = `You are A.S.A.D (AI-powered Smart Assistant for Dashboard), a productivity assistant that helps users manage their dashboard and personal scheduling.
 
 CRITICAL: When users ask you to ADD, DELETE, UPDATE, or COMPLETE goals/schedules/workouts/calendar events, you MUST respond with ONLY the JSON action object on the FIRST line, followed by your message.
 
@@ -562,74 +737,101 @@ ${dashboardData.schedule.map(e => `- ID:${e.id} | ${e.time}: ${e.event}`).join('
 Calendar events:
 ${(dashboardData.calendar || []).filter(e => e && typeof e.start_time === 'string').map(e => `- ID:${e.id} | ${e.start_time.slice(0,10)}: ${e.title}`).join('\n') || 'No calendar events'}
 
+SCHEDULING ASSISTANT STATUS:
+User Preferences: ${dashboardData.userPreferences ? 
+  `✓ Configured - Wake: ${dashboardData.userPreferences.wake_time}, Work: ${dashboardData.userPreferences.work_start}-${dashboardData.userPreferences.work_end}, Workout: ${dashboardData.userPreferences.preferred_workout_time}` : 
+  '⚠ Not configured - User needs to set up daily routine preferences'}
+
+Today's AI Schedule: ${dashboardData.todaySchedule ? 
+  `✓ Generated (${dashboardData.todaySchedule.generated_schedule ? JSON.parse(dashboardData.todaySchedule.generated_schedule).schedule?.length || 0 : 0} activities)` : 
+  '⚠ No schedule generated for today'}
+
+Tomorrow's AI Schedule: ${dashboardData.tomorrowSchedule ? 
+  `✓ Generated (${dashboardData.tomorrowSchedule.generated_schedule ? JSON.parse(dashboardData.tomorrowSchedule.generated_schedule).schedule?.length || 0 : 0} activities)` : 
+  '⚠ No schedule generated for tomorrow'}
+
 Workout log entries: ${dashboardData.workoutLog.length} workouts
 User level: ${dashboardData.level} (${dashboardData.xp}/${dashboardData.maxXp} XP)
 
 REQUIRED JSON ACTIONS (use EXACTLY this format on first line):
 
+CALENDAR ACTIONS:
 When user wants to add a calendar event:
 {"action": "add_calendar_event", "title": "event title", "date": "YYYY-MM-DD", "description": "optional description", "all_day": true/false}
 
-When user wants to delete a calendar event (identify the exact ID from the list above, or match by date/title):
+When user wants to delete a calendar event:
 {"action": "delete_calendar_event", "id": specific_event_id_number}
 
-When user wants to know what events are on a specific date:
-{"action": "list_calendar_events", "date": "YYYY-MM-DD"}
-
+GOAL ACTIONS:
 When user wants to add a goal:
 {"action": "add_goal", "type": "shortTerm", "text": "exact goal text", "progress": 0}
 
-When user wants to add a long term goal:
-{"action": "add_goal", "type": "longTerm", "text": "exact goal text", "progress": 0}
-
-When user wants to delete a goal (identify the exact ID from the list above):
+When user wants to delete a goal:
 {"action": "delete_goal", "id": specific_goal_id_number}
 
 When user wants to complete/update a goal:
 {"action": "update_goal", "id": specific_goal_id_number, "completed": true, "progress": 100}
 
+SCHEDULE ACTIONS:
 When user wants to add to schedule:
 {"action": "add_schedule", "time": "specific time", "event": "event description"}
 
-When user wants to delete/remove/cancel a schedule event:
-- First try to match by ID if one is visible in the current schedule list
-- If no exact ID match, look for the most recently added event that matches the description
-- Look for time matches (4am, 4:00, morning) and event matches (meeting, appointment, etc.)
+When user wants to delete a schedule event:
 {"action": "delete_schedule", "id": specific_schedule_id_number}
 
+SCHEDULING ASSISTANT ACTIONS:
+When user wants to set up their daily routine (first time or updating preferences):
+{"action": "setup_routine", "wake_time": "07:00", "sleep_time": "23:00", "work_start": "09:00", "work_end": "17:00", "workout_preference": "morning/evening", "meal_times": ["08:00", "12:00", "19:00"]}
+
+When user asks to generate tomorrow's schedule or wants a new daily schedule:
+{"action": "generate_schedule", "date": "YYYY-MM-DD", "consider_goals": true}
+
+When user wants to review/modify an existing generated schedule:
+{"action": "modify_schedule", "date": "YYYY-MM-DD", "changes": "description of requested changes"}
+
+When user provides feedback on how their day went (for AI learning):
+{"action": "schedule_feedback", "date": "YYYY-MM-DD", "completed_activities": ["activity1", "activity2"], "missed_activities": ["activity3"], "satisfaction": 8, "feedback": "user comments about the day"}
+
+WORKOUT ACTIONS:
 When user wants to log a workout:
 {"action": "add_workout", "type": "workout type", "duration": minutes, "calories": number}
 
+SCHEDULING ASSISTANT BEHAVIOR:
+1. If user hasn't set up preferences, guide them through setup first
+2. Generate intelligent schedules based on goals, preferences, and past patterns  
+3. Always include buffer time between activities (15-30 minutes)
+4. Respect user's energy patterns (high-energy tasks when they're most alert)
+5. Automatically schedule time for uncompleted goals
+6. Learn from user feedback to improve future schedules
+7. During daily check-ins, review today's completion and generate tomorrow's schedule
+
 CRITICAL RULES:
-1. Always identify the correct ID from the lists above
-2. For deletions, look for keywords like: delete, remove, cancel, clear
-3. Match events by date, title, or both
-4. If multiple events match, ask for clarification
-5. Put JSON on the very first line of your response
-6. NEVER show JSON to the user in your visible response - JSON is for system processing only
-7. When performing actions, respond with friendly natural language explaining what you did
-8. If user asks "what can you do" or general questions, respond conversationally WITHOUT any JSON
+1. Always identify correct IDs from the lists above
+2. Put JSON on the very first line of your response
+3. NEVER show JSON to the user in your visible response
+4. When performing actions, respond with friendly natural language
+5. For general conversation, respond normally WITHOUT any JSON
+6. Be proactive about suggesting schedule improvements and optimizations
 
 EXAMPLES:
-User: "Add a calendar event for August 20th called Doctor Appointment"
-Response: {"action": "add_calendar_event", "title": "Doctor Appointment", "date": "2025-08-20", "description": "", "all_day": true}
-I've added "Doctor Appointment" to your calendar for August 20th.
 
-User: "Delete my Doctor Appointment on August 20th"
-Response: {"action": "delete_calendar_event", "id": 12}
-Your Doctor Appointment on August 20th has been removed from your calendar.
+User: "I want to set up my daily routine"
+Response: {"action": "setup_routine", "wake_time": "07:00", "sleep_time": "23:00", "work_start": "09:00", "work_end": "17:00", "workout_preference": "morning", "meal_times": ["08:00", "12:00", "19:00"]}
+Great! I'd love to help you set up your daily routine. What time do you typically wake up and go to sleep? When do you work? And do you prefer working out in the morning or evening?
 
-User: "What events do I have on August 20th?"
-Response: {"action": "list_calendar_events", "date": "2025-08-20"}
-Here are your events for August 20th: ...
+User: "Generate my schedule for tomorrow"
+Response: {"action": "generate_schedule", "date": "2025-08-24", "consider_goals": true}
+I'll create a personalized schedule for tomorrow based on your routine, goals, and preferences!
 
-IMPORTANT: Only use JSON for action commands (add, delete, complete, etc.). For questions, greetings, or general conversation, respond normally without any JSON.
+User: "How did my schedule work today? I completed my workout and the marketing goal but missed the reading time"
+Response: {"action": "schedule_feedback", "date": "2025-08-23", "completed_activities": ["workout", "marketing goal"], "missed_activities": ["reading time"], "satisfaction": 7, "feedback": "completed workout and marketing goal but missed reading time"}
+Thanks for the feedback! I can see you completed your workout and marketing goal - great job! I'll adjust future schedules to make reading time more realistic for you.
 
-For general conversation (not actions), respond normally and motivationally without JSON.`;
+For general conversation, questions, or greetings, respond normally and motivationally without JSON.`;
 
-    // GROQ API integration
+    // GROQ API integration with upgraded model
     const groqPayload = {
-      model: "llama3-8b-8192",
+      model: "llama-3.1-70b-versatile",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: message }
@@ -948,6 +1150,204 @@ For general conversation (not actions), respond normally and motivationally with
             news: news
           });
           return;
+        }
+
+        // Setup Routine
+        if (actionData.action === 'setup_routine') {
+          actionFound = true;
+          const { preferences } = actionData;
+          
+          try {
+            // Update or insert user preferences
+            const existingPrefs = await pool.query(
+              'SELECT * FROM user_preferences WHERE user_id = $1',
+              [userId]
+            );
+            
+            if (existingPrefs.rows.length > 0) {
+              await pool.query(`
+                UPDATE user_preferences SET 
+                wake_time = $2, sleep_time = $3, work_start = $4, work_end = $5,
+                break_duration = $6, focus_time = $7, high_energy_time = $8, low_energy_time = $9,
+                exercise_preference = $10, meal_times = $11, priorities = $12, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = $1
+              `, [
+                userId, preferences.wake_time, preferences.sleep_time, 
+                preferences.work_start, preferences.work_end, preferences.break_duration,
+                preferences.focus_time, preferences.high_energy_time, preferences.low_energy_time,
+                preferences.exercise_preference, JSON.stringify(preferences.meal_times),
+                JSON.stringify(preferences.priorities)
+              ]);
+            } else {
+              await pool.query(`
+                INSERT INTO user_preferences 
+                (user_id, wake_time, sleep_time, work_start, work_end, break_duration, 
+                 focus_time, high_energy_time, low_energy_time, exercise_preference, 
+                 meal_times, priorities) 
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+              `, [
+                userId, preferences.wake_time, preferences.sleep_time,
+                preferences.work_start, preferences.work_end, preferences.break_duration,
+                preferences.focus_time, preferences.high_energy_time, preferences.low_energy_time,
+                preferences.exercise_preference, JSON.stringify(preferences.meal_times),
+                JSON.stringify(preferences.priorities)
+              ]);
+            }
+            
+            await broadcastDashboardUpdate(userId);
+            
+            res.json({
+              response: "Perfect! I've saved your routine preferences. I can now generate personalized schedules that work with your lifestyle and energy patterns.",
+              action: actionData,
+              success: true
+            });
+            return;
+          } catch (error) {
+            console.error('Setup routine error:', error);
+            res.json({
+              response: "I had trouble saving your preferences. Please try again.",
+              action: actionData,
+              error: error.message
+            });
+            return;
+          }
+        }
+
+        // Generate Schedule
+        if (actionData.action === 'generate_schedule') {
+          actionFound = true;
+          const { date, preferences } = actionData;
+          
+          try {
+            // Generate AI schedule
+            const schedule = await generateAISchedule(userId, date, preferences);
+            
+            if (schedule && schedule.length > 0) {
+              // Save schedule to database
+              await pool.query('DELETE FROM daily_schedules WHERE user_id = $1 AND date = $2', [userId, date]);
+              
+              for (const activity of schedule) {
+                await pool.query(`
+                  INSERT INTO daily_schedules (user_id, date, time_slot, activity, priority, energy_level, category)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7)
+                `, [userId, date, activity.time, activity.activity, activity.priority, activity.energy_level, activity.category]);
+              }
+              
+              await broadcastDashboardUpdate(userId);
+              
+              const scheduleText = schedule.map(s => `${s.time}: ${s.activity}`).join('\n');
+              res.json({
+                response: `I've generated an optimized schedule for ${date}:\n\n${scheduleText}\n\nThis schedule considers your energy patterns, goals, and preferences. How does this look?`,
+                action: actionData,
+                schedule: schedule,
+                success: true
+              });
+            } else {
+              res.json({
+                response: "I had trouble generating your schedule. Please make sure you have preferences set up and goals defined.",
+                action: actionData,
+                success: false
+              });
+            }
+            return;
+          } catch (error) {
+            console.error('Generate schedule error:', error);
+            res.json({
+              response: "I encountered an issue while creating your schedule. Please try again.",
+              action: actionData,
+              error: error.message
+            });
+            return;
+          }
+        }
+
+        // Modify Schedule
+        if (actionData.action === 'modify_schedule') {
+          actionFound = true;
+          const { date, time_slot, new_activity, reason } = actionData;
+          
+          try {
+            const result = await pool.query(`
+              UPDATE daily_schedules 
+              SET activity = $3, updated_at = CURRENT_TIMESTAMP 
+              WHERE user_id = $1 AND date = $2 AND time_slot = $4 
+              RETURNING *
+            `, [userId, date, new_activity, time_slot]);
+            
+            if (result.rows.length === 0) {
+              res.json({
+                response: `I couldn't find a schedule item at ${time_slot} on ${date} to modify.`,
+                action: actionData,
+                success: false
+              });
+              return;
+            }
+            
+            await broadcastDashboardUpdate(userId);
+            
+            res.json({
+              response: `I've updated your ${time_slot} activity to "${new_activity}" for ${date}. ${reason ? `Reason: ${reason}` : ''}`,
+              action: actionData,
+              data: result.rows[0],
+              success: true
+            });
+            return;
+          } catch (error) {
+            console.error('Modify schedule error:', error);
+            res.json({
+              response: "I had trouble modifying your schedule. Please try again.",
+              action: actionData,
+              error: error.message
+            });
+            return;
+          }
+        }
+
+        // Schedule Feedback
+        if (actionData.action === 'schedule_feedback') {
+          actionFound = true;
+          const { date, rating, feedback, completed_activities, missed_activities } = actionData;
+          
+          try {
+            await pool.query(`
+              INSERT INTO schedule_feedback 
+              (user_id, date, rating, feedback, completed_activities, missed_activities)
+              VALUES ($1, $2, $3, $4, $5, $6)
+              ON CONFLICT (user_id, date) DO UPDATE SET
+              rating = $3, feedback = $4, completed_activities = $5, 
+              missed_activities = $6, updated_at = CURRENT_TIMESTAMP
+            `, [
+              userId, date, rating, feedback, 
+              JSON.stringify(completed_activities), 
+              JSON.stringify(missed_activities)
+            ]);
+            
+            await broadcastDashboardUpdate(userId);
+            
+            let response = `Thank you for the feedback on your ${date} schedule! `;
+            if (rating >= 4) {
+              response += "I'm glad the schedule worked well for you. I'll use this to make even better schedules.";
+            } else if (rating >= 2) {
+              response += "I'll adjust future schedules based on your feedback to better match your needs.";
+            } else {
+              response += "I understand the schedule didn't work well. Let me learn from this to create much better schedules for you.";
+            }
+            
+            res.json({
+              response: response,
+              action: actionData,
+              success: true
+            });
+            return;
+          } catch (error) {
+            console.error('Schedule feedback error:', error);
+            res.json({
+              response: "I had trouble saving your feedback. Please try again.",
+              action: actionData,
+              error: error.message
+            });
+            return;
+          }
         }
       }
     } catch (parseError) {

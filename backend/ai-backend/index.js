@@ -1,4 +1,4 @@
-﻿﻿
+﻿
 import express from 'express';
 import dotenv from 'dotenv';
 import axios from 'axios';
@@ -96,34 +96,37 @@ console.log('=== DATABASE CONNECTION DEBUG ===');
 console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
 console.log('DATABASE_URL (masked):', process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/:[^:@]*@/, ':***@') : 'NOT SET');
 
-// Parse DATABASE_URL manually to ensure it's used correctly
-const parseConnectionString = (url) => {
-  const parsed = new URL(url);
-  return {
-    user: parsed.username,
-    password: parsed.password,
-    host: parsed.hostname,
-    port: parsed.port || 5432,
-    database: parsed.pathname.slice(1), // Remove leading slash
-    ssl: { rejectUnauthorized: false }
-  };
-};
+// Use connectionString as-is — manual URL parsing breaks Supabase pooler usernames (postgres.<project-ref>)
+const poolConfig = process.env.DATABASE_URL
+  ? {
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 5,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+    }
+  : {
+      user: process.env.DB_USER,
+      host: process.env.DB_HOST,
+      database: process.env.DB_NAME,
+      password: process.env.DB_PASSWORD,
+      port: process.env.DB_PORT || 5432,
+      ssl: { rejectUnauthorized: false },
+      max: 5,
+    };
 
-// PostgreSQL connection - parse DATABASE_URL explicitly
-const pool = new Pool(
-  process.env.DATABASE_URL 
-    ? parseConnectionString(process.env.DATABASE_URL)
-    : {
-        user: process.env.DB_USER,
-        host: process.env.DB_HOST,
-        database: process.env.DB_NAME,
-        password: process.env.DB_PASSWORD,
-        port: process.env.DB_PORT || 5432,
-        ssl: { rejectUnauthorized: false }
-      }
-);
+const pool = new Pool(poolConfig);
 
-console.log('Connecting to host:', process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL).hostname : process.env.DB_HOST);
+if (process.env.DATABASE_URL) {
+  try {
+    const parsed = new URL(process.env.DATABASE_URL);
+    console.log('Connecting to host:', parsed.hostname, '| user:', parsed.username || '(missing)');
+  } catch {
+    console.log('DATABASE_URL is set but could not be parsed for debug logging');
+  }
+} else {
+  console.log('Connecting to host:', process.env.DB_HOST);
+}
 
 // Test database connection
 pool.connect((err, client, release) => {

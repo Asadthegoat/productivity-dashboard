@@ -27,6 +27,29 @@ interface WorkoutLog {
   date: string;
 }
 
+interface FoodLogItem {
+  id: number;
+  food_name: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  logged_at: string;
+}
+
+interface FoodSearchResult {
+  id: string;
+  name: string;
+  brand?: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  servingQty: number;
+  servingUnit: string;
+  photo?: string | null;
+}
+
 interface NewsItem {
   title: string;
   source: string;
@@ -49,6 +72,8 @@ interface DashboardData {
   schedule: ScheduleEvent[];
   workoutLog: WorkoutLog[];
   eatingGoals: any[];
+  calorieLog: FoodLogItem[];
+  dailyCalorieGoal: number;
   news: NewsItem[];
   level: number;
   xp: number;
@@ -71,6 +96,17 @@ export interface DashboardContextType {
   updateScheduleEvent?: (id: number, time: string, event: string, type?: string) => Promise<void>;
   deleteScheduleEvent?: (id: number) => Promise<void>;
   addWorkout: (type: string, duration: number, calories: number) => Promise<void>;
+  logFood: (food: {
+    name: string;
+    calories: number;
+    protein?: number;
+    carbs?: number;
+    fat?: number;
+    timestamp?: string;
+  }) => Promise<{ goalMet: boolean; xp?: number; level?: number }>;
+  removeFood: (id: number) => Promise<void>;
+  setCalorieGoal: (dailyCalorieGoal: number) => Promise<void>;
+  searchFood: (query: string) => Promise<FoodSearchResult[]>;
   // Chat functions
   sendChatMessage: (message: string) => Promise<void>;
   setChatMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
@@ -120,6 +156,8 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
       { id: 2, type: "Strength", duration: 45, calories: 150, date: new Date().toISOString() },
     ],
     eatingGoals: [],
+    calorieLog: [],
+    dailyCalorieGoal: 2200,
     news: [],
     level: 8,
     xp: 2250,
@@ -513,6 +551,127 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     }
   };
 
+  const searchFood = async (query: string) => {
+    try {
+      const response = await fetch(`${serverUrl}/api/calories/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to search food');
+      }
+
+      const result = await response.json();
+      return result.results || [];
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to search food');
+      return [];
+    }
+  };
+
+  const logFood = async (food: {
+    name: string;
+    calories: number;
+    protein?: number;
+    carbs?: number;
+    fat?: number;
+    timestamp?: string;
+  }) => {
+    try {
+      const response = await fetch(`${serverUrl}/api/calories/log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...food, userId })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to log food');
+      }
+
+      const result = await response.json();
+
+      if (!isConnected) {
+        setData(prev => ({
+          ...prev,
+          calorieLog: [
+            {
+              id: Date.now(),
+              food_name: food.name,
+              calories: food.calories,
+              protein: food.protein ?? 0,
+              carbs: food.carbs ?? 0,
+              fat: food.fat ?? 0,
+              logged_at: food.timestamp || new Date().toISOString()
+            },
+            ...prev.calorieLog
+          ],
+          xp: result?.xp != null ? result.xp : prev.xp,
+          level: result?.level != null ? result.level : prev.level,
+          maxXp: result?.maxXp != null ? result.maxXp : prev.maxXp
+        }));
+      }
+
+      return {
+        goalMet: result.goalMet || false,
+        xp: result.xp,
+        level: result.level
+      };
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to log food');
+      throw err;
+    }
+  };
+
+  const removeFood = async (id: number) => {
+    try {
+      const response = await fetch(`${serverUrl}/api/calories/log/${id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      });
+
+      if (!response.ok) throw new Error('Failed to remove food log');
+
+      if (!isConnected) {
+        setData(prev => ({
+          ...prev,
+          calorieLog: prev.calorieLog.filter(item => item.id !== id)
+        }));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove food log');
+      throw err;
+    }
+  };
+
+  const setCalorieGoal = async (dailyCalorieGoal: number) => {
+    try {
+      const response = await fetch(`${serverUrl}/api/calories/goal`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dailyCalorieGoal, userId })
+      });
+
+      if (!response.ok) throw new Error('Failed to update calorie goal');
+
+      const result = await response.json();
+
+      if (!isConnected) {
+        setData(prev => ({
+          ...prev,
+          dailyCalorieGoal
+        }));
+      }
+
+      return result.goal;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update calorie goal');
+      throw err;
+    }
+  };
+
   const sendChatMessage = async (message: string) => {
     if (!message.trim()) return;
 
@@ -575,6 +734,10 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     updateScheduleEvent,
     deleteScheduleEvent,
     addWorkout,
+    searchFood,
+    logFood,
+    removeFood,
+    setCalorieGoal,
     sendChatMessage
   };
 

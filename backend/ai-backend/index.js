@@ -148,6 +148,7 @@ const getUserData = async (userId = 1) => {
     const scheduleResult = await pool.query('SELECT * FROM schedule_events WHERE user_id = $1', [userId]);
     const workoutResult = await pool.query('SELECT * FROM workout_log WHERE user_id = $1', [userId]);
     const eatingGoalsResult = await pool.query('SELECT * FROM eating_goals WHERE user_id = $1', [userId]);
+    const foodLogResult = await pool.query('SELECT * FROM food_log WHERE user_id = $1 AND DATE(logged_at) = CURRENT_DATE ORDER BY logged_at DESC', [userId]);
     const calendarResult = await pool.query('SELECT * FROM calendar_events WHERE user_id = $1', [userId]);
     
     // Get user preferences and daily schedules for scheduling assistant
@@ -186,6 +187,8 @@ const getUserData = async (userId = 1) => {
       schedule: scheduleResult.rows,
       workoutLog: workoutResult.rows,
       eatingGoals: eatingGoalsResult.rows,
+      calorieLog: foodLogResult.rows,
+      dailyCalorieGoal: eatingGoalsResult.rows[0]?.daily_calorie_goal || 2200,
       news: newsResult.rows,
       calendar: calendarEvents,
       userPreferences: userPreferencesResult.rows[0] || null,
@@ -700,6 +703,188 @@ app.post('/api/workout', async (req, res) => {
   } catch (error) {
     console.error('Error saving workout:', error);
     res.status(500).json({ error: 'Failed to save workout' });
+  }
+});
+
+// Nutritionix proxy for food search
+app.post('/api/calories/search', async (req, res) => {
+  try {
+    const { query } = req.body;
+    const appId = process.env.NUTRITIONIX_APP_ID;
+    const appKey = process.env.NUTRITIONIX_APP_KEY;
+
+    if (!query || typeof query !== 'string') {
+      return res.status(400).json({ error: 'Food query is required.' });
+    }
+    if (!appId || !appKey) {
+      return res.status(500).json({ error: 'Nutritionix credentials are not configured.' });
+    }
+
+    const nutritionixResponse = await axios.post('https://trackapi.nutritionix.com/v2/natural/nutrients', {
+      query: query.trim()
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-app-id': appId,
+        'x-app-key': appKey
+      }
+    });
+
+    const foods = nutritionixResponse.data.foods || [];
+    const results = foods.map(food => ({
+      id: `${food.food_name}-${food.serving_qty || 1}-${food.serving_unit || 'serving'}`,
+      name: food.food_name || food.food_name || 'Unknown food',
+      brand: food.brand_name || food.nix_brand_name || '',
+      calories: food.nf_calories || 0,
+      protein: food.nf_protein || 0,
+      carbs: food.nf_total_carbohydrate || 0,
+      fat: food.nf_total_fat || 0,
+      servingQty: food.serving_qty || 1,
+      servingUnit: food.serving_unit || 'serving',
+      photo: food.photo?.thumb || null
+    }));
+
+    res.json({ success: true, results });
+  } catch (error) {
+    console.error('Error in /api/calories/search:', error.message || error);
+    res.status(500).json({ error: 'Failed to search food items.' });
+  }
+});
+
+app.post('/api/calories/log', async (req, res) => {
+  try {
+    const { name, calories, protein = 0, carbs = 0, fat = 0, timestamp, userId = 1 } = req.body;
+
+    if (!name || calories == null) {
+      return res.status(400).json({ error: 'Food name and calories are required.' });
+    }
+
+    const priorTotalResult = await pool.query(
+      'SELECT COALESCE(SUM(calories), 0) AS total_calories FROM food_log WHERE user_id = $1 AND DATE(logged_at) = CURRENT_DATE',
+      [userId]
+    );
+    const priorTotalCalories = Number(priorTotalResult.rows[0]?.total_calories || 0);
+
+    const foodLogResult = await pool.query(
+      'INSERT INTO food_log (user_id, food_name, calories, protein, carbs, fat, logged_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [userId, name, calories, protein, carbs, fat, timestamp ? new Date(timestamp) : new Date()]
+    );
+
+    const goalResult = await pool.query('SELECT daily_calorie_goal FROM eating_goals WHERE user_id = $1', [userId]);
+    const dailyCalorieGoal = Number(goalResult.rows[0]?.daily_calorie_goal || 2200);
+    const newTotalCalories = priorTotalCalories + Number(calories);
+    const goalMet = dailyCalorieGoal > 0 && priorTotalCalories < dailyCalorieGoal && newTotalCalories >= dailyCalorieGoal;
+
+    let levelUpdate = null;
+    if (goalMet) {
+      const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+      const user = userResult.rows[0];
+
+      let newXp = Math.min(user.xp + 50, user.max_xp);
+      let newLevel = user.level;
+      let newMaxXp = user.max_xp;
+
+      if (newXp >= user.max_xp) {
+        newLevel += 1;
+        newXp = 0;
+        newMaxXp = Math.floor(user.max_xp * 1.2);
+      }
+
+      await pool.query(
+        'UPDATE users SET xp = $1, level = $2, max_xp = $3 WHERE id = $4',
+        [newXp, newLevel, newMaxXp, userId]
+      );
+
+      levelUpdate = { xp: newXp, level: newLevel, maxXp: newMaxXp };
+    }
+
+    await broadcastDashboardUpdate(userId);
+
+    res.json({
+      success: true,
+      log: foodLogResult.rows[0],
+      totalCalories: newTotalCalories,
+      dailyCalorieGoal,
+      goalMet,
+      ...(levelUpdate ? { xp: levelUpdate.xp, level: levelUpdate.level, maxXp: levelUpdate.maxXp } : {})
+    });
+  } catch (error) {
+    console.error('Error saving food log:', error.message || error);
+    res.status(500).json({ error: 'Failed to save food log.' });
+  }
+});
+
+app.get('/api/calories/today', async (req, res) => {
+  try {
+    const userId = req.query.userId ? Number(req.query.userId) : 1;
+    const foodLogResult = await pool.query(
+      'SELECT * FROM food_log WHERE user_id = $1 AND DATE(logged_at) = CURRENT_DATE ORDER BY logged_at DESC',
+      [userId]
+    );
+    const totalResult = await pool.query(
+      'SELECT COALESCE(SUM(calories), 0) AS total_calories FROM food_log WHERE user_id = $1 AND DATE(logged_at) = CURRENT_DATE',
+      [userId]
+    );
+    const dailyGoalResult = await pool.query('SELECT daily_calorie_goal FROM eating_goals WHERE user_id = $1', [userId]);
+
+    res.json({
+      foodLog: foodLogResult.rows,
+      totalCalories: Number(totalResult.rows[0]?.total_calories || 0),
+      dailyCalorieGoal: Number(dailyGoalResult.rows[0]?.daily_calorie_goal || 2200)
+    });
+  } catch (error) {
+    console.error('Error fetching today calorie log:', error.message || error);
+    res.status(500).json({ error: 'Failed to fetch today calorie log.' });
+  }
+});
+
+app.put('/api/calories/goal', async (req, res) => {
+  try {
+    const { dailyCalorieGoal, userId = 1 } = req.body;
+
+    if (dailyCalorieGoal == null) {
+      return res.status(400).json({ error: 'dailyCalorieGoal is required.' });
+    }
+
+    const existing = await pool.query('SELECT * FROM eating_goals WHERE user_id = $1', [userId]);
+    let result;
+
+    if (existing.rows.length > 0) {
+      result = await pool.query(
+        'UPDATE eating_goals SET daily_calorie_goal = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2 RETURNING *',
+        [dailyCalorieGoal, userId]
+      );
+    } else {
+      result = await pool.query(
+        'INSERT INTO eating_goals (user_id, daily_calorie_goal) VALUES ($1, $2) RETURNING *',
+        [userId, dailyCalorieGoal]
+      );
+    }
+
+    await broadcastDashboardUpdate(userId);
+
+    res.json({ success: true, goal: result.rows[0] });
+  } catch (error) {
+    console.error('Error updating daily calorie goal:', error.message || error);
+    res.status(500).json({ error: 'Failed to update daily calorie goal.' });
+  }
+});
+
+app.delete('/api/calories/log/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId = 1 } = req.body;
+
+    const result = await pool.query('DELETE FROM food_log WHERE id = $1 AND user_id = $2 RETURNING *', [id, userId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Food log entry not found.' });
+    }
+
+    await broadcastDashboardUpdate(userId);
+    res.json({ success: true, deletedLog: result.rows[0] });
+  } catch (error) {
+    console.error('Error deleting food log entry:', error.message || error);
+    res.status(500).json({ error: 'Failed to delete food log entry.' });
   }
 });
 
